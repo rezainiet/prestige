@@ -184,12 +184,12 @@ async function resolveLandingSession(sessionToken?: string | null, funnelToken?:
 async function fireSubscribeForStart(args: {
   telegramUserId: string;
   telegramUsername?: string | null;
+  telegramFirstName?: string | null;
+  telegramLastName?: string | null;
   eventTime: number;
   session?: Awaited<ReturnType<typeof resolveLandingSession>>;
   sessionToken: string | null;
   funnelToken: string | null;
-  ip: string | null;
-  ua: string | null;
 }) {
   const existing = await getBotStartByTelegramUserId(args.telegramUserId);
   // Idempotent: only fire once per user. Subsequent /starts skip Meta if it
@@ -225,11 +225,17 @@ async function fireSubscribeForStart(args: {
   });
 
   try {
+    // Only forward IP/UA captured from the user's browser on the landing
+    // visit. Falling back to the Telegram webhook request would send Telegram
+    // datacenter IPs / bot UA strings to Meta — those match no real user and
+    // tank Event Match Quality. Better to send nothing than wrong data.
     const metaResult = await fireSubscribeEvent({
       eventId,
       eventTime: Math.floor(args.eventTime),
       telegramUserId: args.telegramUserId,
       telegramUsername: args.telegramUsername || undefined,
+      telegramFirstName: args.telegramFirstName || undefined,
+      telegramLastName: args.telegramLastName || undefined,
       visitorId: args.session?.visitorId || undefined,
       fbclid: args.session?.fbclid || undefined,
       fbp: args.session?.fbp || undefined,
@@ -239,8 +245,8 @@ async function fireSubscribeForStart(args: {
       utmCampaign: args.session?.utmCampaign || undefined,
       utmContent: args.session?.utmContent || undefined,
       sourceUrl: args.session?.landingPage || undefined,
-      userAgent: args.session?.userAgent || args.ua || undefined,
-      ipAddress: args.session?.ipAddress || args.ip || undefined,
+      userAgent: args.session?.userAgent || undefined,
+      ipAddress: args.session?.ipAddress || undefined,
     });
 
     const status = metaResult.success ? "sent" : metaResult.retryable ? "retrying" : "failed";
@@ -506,12 +512,12 @@ export function setupTelegramWebhook(app: Express) {
         await fireSubscribeForStart({
           telegramUserId: userId,
           telegramUsername: telegramMessage.from.username,
+          telegramFirstName: telegramMessage.from.first_name || null,
+          telegramLastName: telegramMessage.from.last_name || null,
           eventTime: telegramMessage.date,
           session,
           sessionToken: decoded?.sessionToken || linkage?.sessionToken || session?.sessionToken || null,
           funnelToken: decoded?.funnelToken || linkage?.funnelToken || session?.funnelToken || null,
-          ip,
-          ua,
         });
       }
 
