@@ -58,12 +58,12 @@ function buildVisitSequence() {
     return socialNotifications;
   }
   const shuffled = shuffleNotifications(socialNotifications);
-  const lastFirstToastId = window.localStorage.getItem("misterb-last-toast-id");
+  const lastFirstToastId = window.localStorage.getItem("prestige-last-toast-id");
   if (shuffled.length > 1 && shuffled[0].id === lastFirstToastId) {
     const firstItem = shuffled.shift();
     if (firstItem) shuffled.push(firstItem);
   }
-  window.localStorage.setItem("misterb-last-toast-id", shuffled[0].id);
+  window.localStorage.setItem("prestige-last-toast-id", shuffled[0].id);
   return shuffled;
 }
 
@@ -117,7 +117,7 @@ function CtaButton({ href, label, variant, onTrack, openInSameTab = false, trail
 
   const styles =
     variant === "primary"
-      ? "bg-gradient-to-br from-[#ff4747] via-[#e60000] to-[#a60000] text-white shadow-[0_12px_28px_rgba(230,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.30)] hover:shadow-[0_16px_36px_rgba(230,0,0,0.60),inset_0_1px_0_rgba(255,255,255,0.40)] hover:-translate-y-[2px]"
+      ? "bg-gradient-to-br from-[#fde047] via-[#facc15] to-[#a16207] text-[#0a1733] shadow-[0_12px_28px_rgba(202,138,4,0.45),inset_0_1px_0_rgba(255,255,255,0.45)] hover:shadow-[0_16px_36px_rgba(202,138,4,0.60),inset_0_1px_0_rgba(255,255,255,0.55)] hover:-translate-y-[2px]"
       : "border border-white/12 bg-white/[0.04] text-white/95 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-md hover:bg-white/[0.07] hover:border-white/20";
 
   return (
@@ -130,7 +130,7 @@ function CtaButton({ href, label, variant, onTrack, openInSameTab = false, trail
       className={`${base} ${styles}`}
     >
       <TelegramIcon
-        className={`h-7 w-7 ${variant === "primary" ? "text-[#a60000]" : "text-[#2AABEE]"}`}
+        className={`h-7 w-7 ${variant === "primary" ? "text-[#1e40af]" : "text-[#2AABEE]"}`}
       />
       <span className="uppercase tracking-[0.02em]">{label}</span>
       {trailing ? (
@@ -202,38 +202,38 @@ export default function Home() {
   const activeToast = notifications[activeIndex];
 
   return (
-    <main className="relative min-h-[100svh] overflow-hidden bg-[#0a0405] text-white">
+    <main className="relative min-h-[100svh] overflow-hidden bg-[#0a1733] text-white">
       <style>{`
-        @keyframes maximeFadeUp {
+        @keyframes prestigeFadeUp {
           from { opacity: 0; transform: translateY(14px); }
           to   { opacity: 1; transform: translateY(0); }
         }
-        @keyframes maximePulse {
+        @keyframes prestigePulse {
           0%, 100% { transform: scale(1); opacity: 0.9; }
           50%      { transform: scale(1.18); opacity: 1; }
         }
-        @keyframes maximeRingSpin {
+        @keyframes prestigeRingSpin {
           to { transform: rotate(360deg); }
         }
-        .maxime-stagger > * {
+        .prestige-stagger > * {
           opacity: 0;
-          animation: maximeFadeUp 0.7s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+          animation: prestigeFadeUp 0.7s cubic-bezier(0.22, 1, 0.36, 1) forwards;
         }
-        .maxime-stagger > *:nth-child(1) { animation-delay: 0.05s; }
-        .maxime-stagger > *:nth-child(2) { animation-delay: 0.18s; }
-        .maxime-stagger > *:nth-child(3) { animation-delay: 0.30s; }
-        .maxime-stagger > *:nth-child(4) { animation-delay: 0.42s; }
-        .maxime-stagger > *:nth-child(5) { animation-delay: 0.54s; }
-        .maxime-stagger > *:nth-child(6) { animation-delay: 0.66s; }
+        .prestige-stagger > *:nth-child(1) { animation-delay: 0.05s; }
+        .prestige-stagger > *:nth-child(2) { animation-delay: 0.18s; }
+        .prestige-stagger > *:nth-child(3) { animation-delay: 0.30s; }
+        .prestige-stagger > *:nth-child(4) { animation-delay: 0.42s; }
+        .prestige-stagger > *:nth-child(5) { animation-delay: 0.54s; }
+        .prestige-stagger > *:nth-child(6) { animation-delay: 0.66s; }
       `}</style>
 
-      {/* Mesh gradient background — red on black, matches logo palette */}
+      {/* Mesh gradient background — gold + royal blue, matches Prestige logo palette */}
       <div aria-hidden="true" className="pointer-events-none absolute inset-0">
-        <div className="absolute -left-[18%] -top-[12%] h-[55vh] w-[55vh] rounded-full bg-[#ff1f1f] opacity-[0.32] blur-[120px]" />
-        <div className="absolute right-[-18%] top-[6%] h-[48vh] w-[48vh] rounded-full bg-[#d40606] opacity-[0.36] blur-[130px]" />
-        <div className="absolute left-[6%] bottom-[-20%] h-[60vh] w-[60vh] rounded-full bg-[#8a0202] opacity-[0.40] blur-[140px]" />
-        <div className="absolute right-[8%] bottom-[8%] h-[36vh] w-[36vh] rounded-full bg-[#ff5252] opacity-[0.18] blur-[110px]" />
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(255,255,255,0.05),transparent_55%)]" />
+        <div className="absolute -left-[18%] -top-[12%] h-[55vh] w-[55vh] rounded-full bg-[#fbbf24] opacity-[0.32] blur-[120px]" />
+        <div className="absolute right-[-18%] top-[6%] h-[48vh] w-[48vh] rounded-full bg-[#1e40af] opacity-[0.40] blur-[130px]" />
+        <div className="absolute left-[6%] bottom-[-20%] h-[60vh] w-[60vh] rounded-full bg-[#ca8a04] opacity-[0.34] blur-[140px]" />
+        <div className="absolute right-[8%] bottom-[8%] h-[36vh] w-[36vh] rounded-full bg-[#fde047] opacity-[0.18] blur-[110px]" />
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(253,224,71,0.06),transparent_55%)]" />
         <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(0,0,0,0)_0%,rgba(0,0,0,0.45)_100%)]" />
       </div>
 
@@ -242,18 +242,18 @@ export default function Home() {
         className="relative mx-auto flex min-h-[100svh] w-full max-w-[440px] flex-col items-center justify-center px-5 py-10 text-center"
       >
         <div
-          className={`maxime-stagger w-full ${hasMounted ? "" : "invisible"} rounded-[28px] border border-white/10 bg-white/[0.045] p-7 shadow-[0_30px_80px_-24px_rgba(0,0,0,0.6),inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-2xl sm:p-8`}
+          className={`prestige-stagger w-full ${hasMounted ? "" : "invisible"} rounded-[28px] border border-white/10 bg-white/[0.045] p-7 shadow-[0_30px_80px_-24px_rgba(0,0,0,0.6),inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-2xl sm:p-8`}
         >
           {/* Avatar / logo with red glow ring + online dot */}
           <div className="flex justify-center">
             <div className="relative">
               <div
                 aria-hidden="true"
-                className="absolute -inset-[6px] rounded-full bg-[radial-gradient(circle,rgba(255,40,40,0.55)_0%,rgba(255,40,40,0)_70%)] blur-md"
+                className="absolute -inset-[6px] rounded-full bg-[radial-gradient(circle,rgba(251,191,36,0.55)_0%,rgba(251,191,36,0)_70%)] blur-md"
               />
               <div
                 aria-hidden="true"
-                className="absolute -inset-[2px] rounded-full bg-[conic-gradient(from_120deg,#ff4d4d,#b30000,#ff7a7a,#ff4d4d)] opacity-95"
+                className="absolute -inset-[2px] rounded-full bg-[conic-gradient(from_120deg,#fbbf24,#ca8a04,#fde047,#fbbf24)] opacity-95"
               />
               <img
                 src="/prestige-logo.png"
@@ -262,11 +262,11 @@ export default function Home() {
                 height={120}
                 loading="eager"
                 decoding="async"
-                className="relative h-[120px] w-[120px] rounded-full object-cover shadow-[0_18px_40px_rgba(190,10,10,0.45)] ring-1 ring-white/10"
+                className="relative h-[120px] w-[120px] rounded-full object-cover shadow-[0_18px_40px_rgba(202,138,4,0.45)] ring-1 ring-white/10"
               />
               <span
                 aria-hidden="true"
-                className="absolute -bottom-1 right-0 flex h-[24px] w-[24px] items-center justify-center rounded-full border-2 border-[#0a0405] bg-[#22c55e] shadow-[0_2px_8px_rgba(34,197,94,0.55)]"
+                className="absolute -bottom-1 right-0 flex h-[24px] w-[24px] items-center justify-center rounded-full border-2 border-[#0a1733] bg-[#22c55e] shadow-[0_2px_8px_rgba(34,197,94,0.55)]"
               >
                 <span className="h-1.5 w-1.5 rounded-full bg-white/95" />
               </span>
@@ -286,7 +286,7 @@ export default function Home() {
             <span className="relative flex h-2 w-2">
               <span
                 className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#22c55e] opacity-75"
-                style={{ animation: "maximePulse 2.4s ease-in-out infinite" }}
+                style={{ animation: "prestigePulse 2.4s ease-in-out infinite" }}
               />
               <span className="relative inline-flex h-2 w-2 rounded-full bg-[#22c55e]" />
             </span>
