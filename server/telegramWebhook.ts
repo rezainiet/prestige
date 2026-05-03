@@ -11,6 +11,7 @@ import {
   getTelegramJoinByUserId,
   getTelegramLinkageByUserId,
   getUtmSessionByToken,
+  hasSentSubscribeForTelegramUser,
   insertTelegramJoin,
   markBotStartJoined,
   resolveTelegramLinkage,
@@ -205,6 +206,16 @@ async function fireSubscribeForStart(args: {
     // metaWorker's retry logic drive it to completion. Don't double-create.
     return;
   }
+  // Cross-path dedupe: a bypass-join Subscribe may have fired before this
+  // user ever ran /start. Skip Meta in that case so we never send two
+  // Subscribes for the same Telegram user.
+  if (await hasSentSubscribeForTelegramUser(args.telegramUserId)) {
+    log.info("telegramWebhook", "subscribe_skipped_already_sent_for_user", {
+      telegramUserId: args.telegramUserId,
+      origin: "start",
+    });
+    return;
+  }
 
   // eventId tied to firstStartedAt epoch so re-/start would compute the
   // same id (but we skip via the idempotency check above anyway).
@@ -291,6 +302,111 @@ async function fireSubscribeForStart(args: {
   }
 }
 
+async function fireSubscribeForJoin(args: {
+  telegramUserId: string;
+  telegramUsername?: string | null;
+  telegramFirstName?: string | null;
+  telegramLastName?: string | null;
+  channelId: string;
+  eventTime: number;
+  ip: string | null;
+  ua: string | null;
+  session?: Awaited<ReturnType<typeof resolveLandingSession>>;
+  sessionToken: string | null;
+  funnelToken: string | null;
+}): Promise<{ eventId: string; status: "sent" | "retrying" | "failed" } | null> {
+  // Cross-path dedupe: don't double-send if /start already fired Subscribe.
+  if (await hasSentSubscribeForTelegramUser(args.telegramUserId)) {
+    log.info("telegramWebhook", "subscribe_skipped_already_sent_for_user", {
+      telegramUserId: args.telegramUserId,
+      origin: "join",
+    });
+    return null;
+  }
+
+  // Stable per-user-per-channel id so duplicate join webhooks dedupe at Meta.
+  const eventId = `tg_join_${args.telegramUserId}_${args.channelId.replace(/-/g, "n")}`;
+
+  await createMetaEventLog({
+    eventType: "Subscribe",
+    eventScope: "telegram_join",
+    eventId,
+    funnelToken: args.funnelToken,
+    sessionToken: args.sessionToken,
+    telegramUserId: args.telegramUserId,
+    status: "queued",
+    retryable: 0,
+    attemptCount: 0,
+  });
+
+  try {
+    const metaResult = await fireSubscribeEvent({
+      eventId,
+      eventTime: Math.floor(args.eventTime),
+      telegramUserId: args.telegramUserId,
+      telegramUsername: args.telegramUsername || undefined,
+      telegramFirstName: args.telegramFirstName || undefined,
+      telegramLastName: args.telegramLastName || undefined,
+      visitorId: args.session?.visitorId || undefined,
+      fbclid: args.session?.fbclid || undefined,
+      fbp: args.session?.fbp || undefined,
+      sessionCreatedAt: args.session?.createdAt,
+      utmSource: args.session?.utmSource || undefined,
+      utmMedium: args.session?.utmMedium || undefined,
+      utmCampaign: args.session?.utmCampaign || undefined,
+      utmContent: args.session?.utmContent || undefined,
+      sourceUrl: args.session?.landingPage || undefined,
+      // Telegram webhook IP/UA would tank EMQ; only forward landing data when
+      // available, exactly like fireSubscribeForStart.
+      userAgent: args.session?.userAgent || undefined,
+      ipAddress: args.session?.ipAddress || undefined,
+    });
+
+    const status = metaResult.success ? "sent" : metaResult.retryable ? "retrying" : "failed";
+
+    await updateMetaEventLog(eventId, {
+      requestPayloadJson: metaResult.requestBody ? JSON.stringify(metaResult.requestBody) : null,
+      responsePayloadJson: metaResult.responseBody ? JSON.stringify(metaResult.responseBody) : null,
+      httpStatus: metaResult.httpStatus ?? null,
+      status,
+      errorCode: metaResult.errorCode ?? null,
+      errorSubcode: metaResult.errorSubcode ?? null,
+      errorMessage: metaResult.errorMessage ?? null,
+      retryable: metaResult.retryable ? 1 : 0,
+      attemptCount: 1,
+      attemptedAt: new Date(),
+      completedAt: metaResult.success ? new Date() : null,
+      nextRetryAt: metaResult.retryable ? new Date(Date.now() + META_RETRY_DELAY_MS) : null,
+    });
+
+    log.info("telegramWebhook", "subscribe_fired_on_join", {
+      telegramUserId: args.telegramUserId,
+      channelId: args.channelId,
+      eventId,
+      status,
+    });
+
+    return { eventId, status };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.error("telegramWebhook", "meta_join_unexpected_error", {
+      telegramUserId: args.telegramUserId,
+      eventId,
+      error: message,
+    });
+    await updateMetaEventLog(eventId, {
+      status: "retrying",
+      errorCode: "unexpected_error",
+      errorMessage: message,
+      retryable: 1,
+      attemptCount: 1,
+      attemptedAt: new Date(),
+      nextRetryAt: new Date(Date.now() + META_RETRY_DELAY_MS),
+    });
+    return { eventId, status: "retrying" };
+  }
+}
+
 async function handleNewMember(
   user: TelegramUser,
   chat: TelegramChat,
@@ -322,11 +438,40 @@ async function handleNewMember(
       ? "unattributed_join"
       : "bypass_join";
 
-  // Subscribe fires on /start, NOT on join. We mirror the /start-time Meta
-  // event id/status onto the join row so dashboard queries that join
-  // telegram_joins.metaEventId → meta_event_logs still work.
-  const startMetaEventId = storedBotStart?.metaSubscribeEventId || null;
-  const startMetaStatus = storedBotStart?.metaSubscribeStatus || null;
+  // Default: mirror the /start-time Meta event id/status onto the join row
+  // so the dashboard's join → meta_event_logs lookup still works for
+  // attributed users who hit /start before joining.
+  let joinMetaEventId = storedBotStart?.metaSubscribeEventId || null;
+  let joinMetaStatus: "pending" | "sent" | "failed" | "retrying" | "abandoned" | null =
+    (storedBotStart?.metaSubscribeStatus as typeof joinMetaStatus) || null;
+
+  // If the user joined the channel WITHOUT going through /start, /start
+  // never fired Subscribe — fire it here so Meta sees the conversion.
+  // Idempotency is enforced inside fireSubscribeForJoin.
+  let firedSubscribeOnJoin: { eventId: string; status: "sent" | "retrying" | "failed" } | null = null;
+  if (!storedBotStart || storedBotStart.metaSubscribeStatus !== "sent") {
+    firedSubscribeOnJoin = await fireSubscribeForJoin({
+      telegramUserId,
+      telegramUsername: user.username || null,
+      telegramFirstName: user.first_name || null,
+      telegramLastName: user.last_name || null,
+      channelId,
+      eventTime: date,
+      ip,
+      ua,
+      session,
+      sessionToken: resolvedSessionToken || session?.sessionToken || null,
+      funnelToken: resolvedFunnelToken || session?.funnelToken || null,
+    });
+    if (firedSubscribeOnJoin) {
+      joinMetaEventId = firedSubscribeOnJoin.eventId;
+      joinMetaStatus = firedSubscribeOnJoin.status === "sent"
+        ? "sent"
+        : firedSubscribeOnJoin.status === "retrying"
+          ? "retrying"
+          : "failed";
+    }
+  }
 
   await insertTelegramJoin({
     telegramUserId,
@@ -344,8 +489,8 @@ async function handleNewMember(
     utmTerm: session?.utmTerm || null,
     fbclid: session?.fbclid || null,
     fbp: session?.fbp || null,
-    metaEventId: startMetaEventId,
-    metaEventSent: startMetaStatus || undefined,
+    metaEventId: joinMetaEventId,
+    metaEventSent: joinMetaStatus || undefined,
     sessionToken: resolvedSessionToken || session?.sessionToken || null,
     ipAddress: session?.ipAddress || ip,
     userAgent: session?.userAgent || ua,
@@ -358,12 +503,13 @@ async function handleNewMember(
     resolveTelegramLinkage(telegramUserId),
   ]);
 
-  log.info("telegramWebhook", "join_recorded_no_meta_fire", {
+  log.info("telegramWebhook", "join_recorded", {
     telegramUserId,
     channelId,
     attributionStatus,
-    mirroredMetaStatus: startMetaStatus,
-    mirroredMetaEventId: startMetaEventId,
+    mirroredMetaStatus: joinMetaStatus,
+    mirroredMetaEventId: joinMetaEventId,
+    firedSubscribeOnJoin: Boolean(firedSubscribeOnJoin),
   });
 }
 
@@ -503,23 +649,19 @@ export function setupTelegramWebhook(app: Express) {
         fbp: session?.fbp || null,
       });
 
-      // Fire Meta Subscribe at /start time (the conversion moment) — not at
-      // join time. /start is the optimization signal we want Meta to learn.
-      // Skip for organic_start (no session/funnel attribution) to keep the
-      // optimization signal clean.
-      const isAttributed = Boolean(session) || Boolean(decoded?.sessionToken) || Boolean(decoded?.funnelToken);
-      if (isAttributed) {
-        await fireSubscribeForStart({
-          telegramUserId: userId,
-          telegramUsername: telegramMessage.from.username,
-          telegramFirstName: telegramMessage.from.first_name || null,
-          telegramLastName: telegramMessage.from.last_name || null,
-          eventTime: telegramMessage.date,
-          session,
-          sessionToken: decoded?.sessionToken || linkage?.sessionToken || session?.sessionToken || null,
-          funnelToken: decoded?.funnelToken || linkage?.funnelToken || session?.funnelToken || null,
-        });
-      }
+      // Fire Meta Subscribe on EVERY /start — attributed or organic. Meta
+      // needs every conversion to optimize. fireSubscribeForStart enforces
+      // per-user idempotency (and cross-path dedupe with bypass-join fires).
+      await fireSubscribeForStart({
+        telegramUserId: userId,
+        telegramUsername: telegramMessage.from.username,
+        telegramFirstName: telegramMessage.from.first_name || null,
+        telegramLastName: telegramMessage.from.last_name || null,
+        eventTime: telegramMessage.date,
+        session,
+        sessionToken: decoded?.sessionToken || linkage?.sessionToken || session?.sessionToken || null,
+        funnelToken: decoded?.funnelToken || linkage?.funnelToken || session?.funnelToken || null,
+      });
 
       // Single static group URL for everyone — the welcome AND every reminder
       // ship the same link, sourced from the admin setting (falls back to env

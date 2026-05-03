@@ -5,7 +5,6 @@ import {
   TrackingSession,
   buildFallbackTrackingSession,
   initAdvancedTracking,
-  trackTelegramClick,
   trackTelegramGroupClick,
 } from "@/lib/tracking";
 
@@ -20,7 +19,8 @@ function readPersistedFunnelToken(): string {
   }
 }
 
-const telegramUrl = "https://t.me/Prestigeofficiel_bot";
+// Both CTAs route through the bot deep link so /start fires and Subscribe
+// CAPI gets every conversion. No raw t.me/+invite anywhere on the page.
 
 // NOTE: Demo / social-proof content, not real-time data. The rotation only
 // animates the toast — it does not reflect live joins. Wire to
@@ -168,6 +168,7 @@ export default function Home() {
   const [activeIndex, setActiveIndex] = useState(0);
   const [isToastVisible, setIsToastVisible] = useState(false);
   const [telegramGroupHref, setTelegramGroupHref] = useState<string>(getTelegramGroupHref());
+  const [telegramContactHref, setTelegramContactHref] = useState<string>(getTelegramGroupHref());
   const [hasMounted, setHasMounted] = useState(false);
 
   useEffect(() => {
@@ -177,7 +178,9 @@ export default function Home() {
 
   useEffect(() => {
     void initAdvancedTracking().then((session) => {
-      setTelegramGroupHref(getTelegramGroupHref(session));
+      const href = getTelegramGroupHref(session);
+      setTelegramGroupHref(href);
+      setTelegramContactHref(href);
     });
   }, []);
 
@@ -319,17 +322,20 @@ export default function Home() {
               }}
             />
             <CtaButton
-              href={telegramUrl}
+              href={telegramContactHref}
               label="Me contacter"
               variant="secondary"
               openInSameTab
               onTrack={async (event) => {
                 event.preventDefault();
-                try {
-                  await trackTelegramClick("telegram_contact_cta");
-                } finally {
-                  window.location.assign(telegramUrl);
-                }
+                // Route through trackTelegramGroupClick so the same
+                // funnel-token / session-token payload is appended to ?start=,
+                // ensuring /start fires Subscribe with attribution. The
+                // server records eventSource='telegram_contact_cta'.
+                const session = await trackTelegramGroupClick("telegram_contact_cta");
+                const targetHref = getTelegramGroupHref(session);
+                setTelegramContactHref(targetHref);
+                window.location.assign(targetHref);
               }}
             />
           </div>
