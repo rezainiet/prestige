@@ -1039,6 +1039,22 @@ export async function markBotStartJoined(telegramUserId: string) {
     .where(eq(botStarts.telegramUserId, telegramUserId));
 }
 
+export async function setBotStartPersonalInviteLink(
+  telegramUserId: string,
+  inviteLink: string,
+  expiresAt: Date,
+) {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(botStarts)
+    .set({
+      personalInviteLink: inviteLink,
+      personalInviteLinkExpiresAt: expiresAt,
+    })
+    .where(eq(botStarts.telegramUserId, telegramUserId));
+}
+
 export async function getSetting(settingKey: string) {
   const db = await getDb();
   if (!db) return null;

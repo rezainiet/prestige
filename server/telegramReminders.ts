@@ -111,6 +111,11 @@ type BuildReminderDraftsInput = {
   chatId: string;
   firstName?: string | null;
   startedAt?: Date;
+  // Optional per-user invite URL to bake into every reminder. Set this when
+  // the /start handler has just minted a chat_join_request invite link for the
+  // user — keeps reminders aligned with the welcome and avoids leaking the
+  // static admin URL through reminder messages.
+  groupUrlOverride?: string;
 };
 
 let workerStarted = false;
@@ -180,7 +185,11 @@ export async function getResolvedReminderSteps(): Promise<ResolvedReminderStep[]
 
 export async function buildTelegramReminderDrafts(input: BuildReminderDraftsInput) {
   const startedAt = input.startedAt || new Date();
-  const [steps, groupUrl] = await Promise.all([getResolvedReminderSteps(), getTelegramGroupUrl()]);
+  const steps = await getResolvedReminderSteps();
+  const groupUrl =
+    input.groupUrlOverride && input.groupUrlOverride.trim().length > 0
+      ? input.groupUrlOverride
+      : await getTelegramGroupUrl();
 
   return steps.map((step) => ({
     telegramUserId: input.telegramUserId,

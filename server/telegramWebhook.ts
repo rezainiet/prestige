@@ -15,6 +15,7 @@ import {
   insertTelegramJoin,
   markBotStartJoined,
   resolveTelegramLinkage,
+  setBotStartPersonalInviteLink,
   tryRecordTelegramUpdateId,
   updateBotStartMetaStatus,
   updateMetaEventLog,
@@ -26,7 +27,13 @@ import {
   buildTelegramAdminReportText,
   isTelegramAdminAuthorized,
 } from "./telegramAdminReports";
-import { buildJoinGroupKeyboard, sendTelegramMessage } from "./telegramBot";
+import {
+  approveChatJoinRequest,
+  buildJoinGroupKeyboard,
+  createPersonalInviteLink,
+  declineChatJoinRequest,
+  sendTelegramMessage,
+} from "./telegramBot";
 import {
   DEFAULT_TELEGRAM_GROUP_URL,
   getTelegramGroupUrl,
@@ -122,6 +129,25 @@ interface TelegramChatMemberUpdate {
   old_chat_member: { user: TelegramUser; status: string };
 }
 
+interface TelegramChatJoinRequest {
+  chat: TelegramChat;
+  from: TelegramUser;
+  user_chat_id?: number;
+  date: number;
+  bio?: string;
+  invite_link?: {
+    invite_link: string;
+    creator?: TelegramUser;
+    creates_join_request?: boolean;
+    is_primary?: boolean;
+    is_revoked?: boolean;
+    name?: string;
+    expire_date?: number;
+    member_limit?: number;
+    pending_join_request_count?: number;
+  };
+}
+
 interface TelegramUpdate {
   update_id: number;
   message?: {
@@ -133,6 +159,7 @@ interface TelegramUpdate {
   };
   chat_member?: TelegramChatMemberUpdate;
   my_chat_member?: TelegramChatMemberUpdate;
+  chat_join_request?: TelegramChatJoinRequest;
 }
 
 type DecodedStartPayload = {
@@ -663,21 +690,60 @@ export function setupTelegramWebhook(app: Express) {
         funnelToken: decoded?.funnelToken || linkage?.funnelToken || session?.funnelToken || null,
       });
 
-      // Single static group URL for everyone — the welcome AND every reminder
-      // ship the same link, sourced from the admin setting (falls back to env
-      // TELEGRAM_GROUP_URL → DEFAULT_TELEGRAM_GROUP_URL). Per-user invite links
-      // are deliberately NOT used here: one stable URL is what we want users to
-      // see across all touchpoints.
-      const [welcomeMsg, groupUrl] = await Promise.all([
+      // Per-user invite link with creates_join_request=true so every join via
+      // this URL routes through chat_join_request → bot approves only users
+      // with a bot_starts row. We cache the link on the bot_starts row so
+      // re-/start AND the full reminder sequence reuse the same URL within the
+      // 30-day expiry. Falls back to the static admin group URL only on
+      // Telegram API failure — preferable to blocking the welcome flow.
+      const channelId = process.env.TELEGRAM_CHANNEL_ID || "";
+      const [welcomeMsg, staticGroupUrl, freshBotStart] = await Promise.all([
         getSetting("welcome_message"),
         getTelegramGroupUrl(),
+        getBotStartByTelegramUserId(userId),
       ]);
+
+      let groupUrl = staticGroupUrl;
+      const cachedLink = freshBotStart?.personalInviteLink || null;
+      const cachedExpiresAt = freshBotStart?.personalInviteLinkExpiresAt
+        ? new Date(freshBotStart.personalInviteLinkExpiresAt)
+        : null;
+      const cacheStillValid =
+        cachedLink &&
+        cachedExpiresAt &&
+        cachedExpiresAt.getTime() - Date.now() > 60 * 60 * 1000; // 1h safety margin.
+
+      if (cacheStillValid && cachedLink) {
+        groupUrl = cachedLink;
+        log.info("telegramWebhook", "personal_invite_link_reused_from_cache", {
+          telegramUserId: userId,
+        });
+      } else if (channelId) {
+        const personal = await createPersonalInviteLink({
+          chatId: channelId,
+          telegramUserId: userId,
+        });
+        if (personal.ok) {
+          groupUrl = personal.inviteLink;
+          await setBotStartPersonalInviteLink(userId, personal.inviteLink, personal.expiresAt);
+          log.info("telegramWebhook", "personal_invite_link_created", {
+            telegramUserId: userId,
+            expiresAt: personal.expiresAt.toISOString(),
+          });
+        } else {
+          log.warn("telegramWebhook", "personal_invite_link_failed_using_static", {
+            telegramUserId: userId,
+            error: personal.error,
+          });
+        }
+      }
 
       await scheduleTelegramReminderSequence({
         telegramUserId: userId,
         chatId: userId,
         firstName: telegramMessage.from.first_name || null,
         startedAt: new Date(telegramMessage.date * 1000),
+        groupUrlOverride: groupUrl,
       });
 
       const welcomeBody = welcomeMsg
@@ -710,6 +776,60 @@ export function setupTelegramWebhook(app: Express) {
         }
       }
     }
+
+    if (update.chat_join_request) {
+      await handleChatJoinRequest(update.chat_join_request);
+    }
+  }
+
+  /**
+   * Approve channel join requests only for users who have a bot_starts row —
+   * meaning they completed /start. Anyone else (forwarded link, leaked link,
+   * unknown user) is declined. This is the actual gate that enforces "all
+   * users must enter via the bot": the personal-link-with-creates_join_request
+   * generated in /start is the only invite path, and unknown users hitting it
+   * get rejected here.
+   */
+  async function handleChatJoinRequest(req: TelegramChatJoinRequest) {
+    const telegramUserId = String(req.from.id);
+    const channelId = String(req.chat.id);
+
+    const botStart = await getBotStartByTelegramUserId(telegramUserId);
+    if (botStart) {
+      const result = await approveChatJoinRequest({
+        chatId: channelId,
+        telegramUserId,
+      });
+      if (result.ok) {
+        log.info("telegramWebhook", "join_request_approved", {
+          telegramUserId,
+          channelId,
+          username: req.from.username || null,
+          inviteLinkName: req.invite_link?.name || null,
+          attribution: botStart.attributionStatus,
+        });
+      } else {
+        log.error("telegramWebhook", "join_request_approve_failed", {
+          telegramUserId,
+          channelId,
+          error: result.error,
+        });
+      }
+      return;
+    }
+
+    const result = await declineChatJoinRequest({
+      chatId: channelId,
+      telegramUserId,
+    });
+    log.warn("telegramWebhook", "join_request_declined_no_bot_start", {
+      telegramUserId,
+      channelId,
+      username: req.from.username || null,
+      inviteLinkName: req.invite_link?.name || null,
+      declineOk: result.ok,
+      declineError: result.ok ? null : result.error,
+    });
   }
 
   app.post("/api/telegram/setup-webhook", async (req: Request, res: Response) => {
@@ -730,7 +850,12 @@ export function setupTelegramWebhook(app: Express) {
       body: JSON.stringify({
         url: webhookUrl,
         secret_token: getWebhookSecret(),
-        allowed_updates: ["chat_member", "my_chat_member", "message"],
+        allowed_updates: [
+          "chat_member",
+          "my_chat_member",
+          "message",
+          "chat_join_request",
+        ],
       }),
     });
 
