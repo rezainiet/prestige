@@ -4,7 +4,11 @@ import { tryAcquireLease } from "./_core/leaderLease";
 import { log } from "./_core/logger";
 import { getDb, getSetting } from "./db";
 import { buildJoinGroupKeyboard, sendTelegramMessage } from "./telegramBot";
-import { DEFAULT_TELEGRAM_GROUP_URL, getTelegramGroupUrl } from "./telegramGroupLink";
+import {
+  DEFAULT_TELEGRAM_GROUP_URL,
+  getTelegramGroupUrl,
+  replaceTelegramGroupUrlInText,
+} from "./telegramGroupLink";
 
 const WORKER_NAME = "telegram_reminders";
 
@@ -126,7 +130,14 @@ export function renderTelegramReminderMessage(template: string, context: Reminde
   const firstName = (context.firstName || "").trim() || "toi";
   const groupUrl = context.groupUrl || DEFAULT_TELEGRAM_GROUP_URL;
 
-  const renderedMessage = template
+  // Rewrite literal Telegram invite URLs in the template to the per-user
+  // groupUrl BEFORE running placeholder substitution. Without this, any
+  // template that hardcodes a t.me/+inviteHash (legacy templates, the 15m
+  // default, admin-edited messages) leaks that link into reminder messageText
+  // — bypassing the per-user join-request flow we just wired up.
+  const templateWithSwappedUrls = replaceTelegramGroupUrlInText(template, groupUrl);
+
+  const renderedMessage = templateWithSwappedUrls
     .replaceAll("{first_name}", firstName)
     .replaceAll("{firstName}", firstName)
     .replaceAll("{group_url}", groupUrl)
