@@ -145,6 +145,10 @@ type TelegramOverviewData = {
     totalMetaCount: number;
     todayMetaJoins: number;
     conversionRate: string;
+    funnelJoins?: number;
+    bypassJoins?: number;
+    attributedJoins?: number;
+    unattributedJoins?: number;
   };
   botStartStats: {
     botStartsCount: number;
@@ -156,6 +160,75 @@ type TelegramOverviewData = {
     conversionRate: string;
   };
   weeklyJoins: number;
+  rollingJoins?: {
+    last1h: number;
+    last6h: number;
+    last24h: number;
+    today: number;
+    last1hAll: number;
+    last6hAll: number;
+    last24hAll: number;
+    todayAll: number;
+  };
+  decisionStats?: {
+    totalApproved: number;
+    totalDeclined: number;
+    todayApproved: number;
+    todayDeclined: number;
+    last1hApproved: number;
+    last1hDeclined: number;
+    last24hApproved: number;
+    last24hDeclined: number;
+    bypassAttemptsTotal: number;
+    bypassAttemptsToday: number;
+  };
+};
+
+type FunnelSnapshotData = {
+  selected: { window: string; pageviews: number; leads: number; botStarts: number; approvedJoins: number; subscribesSent: number };
+  last1h:   { window: string; pageviews: number; leads: number; botStarts: number; approvedJoins: number; subscribesSent: number };
+  last24h:  { window: string; pageviews: number; leads: number; botStarts: number; approvedJoins: number; subscribesSent: number };
+  last7d:   { window: string; pageviews: number; leads: number; botStarts: number; approvedJoins: number; subscribesSent: number };
+};
+
+type ActivityFeedData = {
+  entries: Array<{
+    kind: "join" | "approve" | "decline" | "subscribe" | "bot_start";
+    occurredAt: string | Date;
+    telegramUserId: string | null;
+    telegramUsername: string | null;
+    telegramFirstName: string | null;
+    channelId: string | null;
+    attributionStatus: string | null;
+    metaStatus: string | null;
+    metaEventId: string | null;
+    reason: string | null;
+  }>;
+};
+
+type MetaEventsData = {
+  rows: Array<{
+    id: number;
+    eventType: string;
+    eventScope: string;
+    eventId: string;
+    status: string;
+    httpStatus: number | null;
+    errorCode: string | null;
+    errorMessage: string | null;
+    attemptCount: number;
+    telegramUserId: string | null;
+    createdAt: string | Date;
+    updatedAt: string | Date;
+  }>;
+  breakdown: Array<{
+    errorCode: string;
+    httpStatus: number;
+    sampleMessage: string;
+    occurrences: number;
+    lastSeenAt: string | Date | null;
+  }>;
+  summary: unknown;
 };
 
 type TelegramJoinRow = {
@@ -683,6 +756,485 @@ function MetricCard({
   );
 }
 
+// ─── Observability sub-components ──────────────────────────────────────────
+
+const FUNNEL_WINDOW_LABEL: Record<string, string> = {
+  last1h: "Dernière heure",
+  last24h: "24 dernières heures",
+  today: "Depuis minuit",
+  last7d: "7 derniers jours",
+};
+
+function FunnelSnapshotPanel({
+  data,
+  window,
+  onWindowChange,
+  loading,
+}: {
+  data: FunnelSnapshotData | null;
+  window: "last1h" | "last24h" | "today" | "last7d";
+  onWindowChange: (w: "last1h" | "last24h" | "today" | "last7d") => void;
+  loading: boolean;
+}) {
+  const stages = useMemo(() => {
+    const sel = data?.selected;
+    if (!sel) return [] as Array<{ label: string; value: number; tone: string }>;
+    return [
+      { label: "PageView", value: sel.pageviews, tone: "text-cyan-300" },
+      { label: "Lead", value: sel.leads, tone: "text-violet-300" },
+      { label: "Bot Start", value: sel.botStarts, tone: "text-amber-300" },
+      { label: "Approved Join", value: sel.approvedJoins, tone: "text-emerald-300" },
+      { label: "Subscribe", value: sel.subscribesSent, tone: "text-yellow-300" },
+    ];
+  }, [data?.selected]);
+
+  return (
+    <Card className="lg:col-span-12 border-amber-500/40 bg-[radial-gradient(circle_at_top_left,rgba(234,179,8,0.18),transparent_38%),#111827] shadow-[0_0_0_1px_rgba(234,179,8,0.10),0_0_30px_rgba(234,179,8,0.08)]">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-amber-300">
+          <Gauge className="h-4 w-4" />
+          <h3 className="text-lg font-semibold tracking-[-0.03em]">Funnel snapshot</h3>
+        </div>
+        <div className="flex flex-wrap gap-1 rounded-full border border-slate-800 bg-slate-950/80 p-1 text-xs">
+          {(["last1h", "last24h", "today", "last7d"] as const).map((w) => (
+            <button
+              key={w}
+              type="button"
+              onClick={() => onWindowChange(w)}
+              className={`rounded-full px-3 py-1 transition ${
+                window === w
+                  ? "bg-amber-400/15 text-amber-200 ring-1 ring-amber-400/40"
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              {FUNNEL_WINDOW_LABEL[w]}
+            </button>
+          ))}
+        </div>
+      </div>
+      <p className="mt-2 text-sm leading-6 text-slate-400">
+        Étape par étape de la pub Meta jusqu’à l’événement Subscribe — calculé en un seul aller-retour MySQL avec lecture sur index.
+      </p>
+      {loading ? (
+        <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-slate-700 bg-slate-950/80 px-4 py-2 text-sm text-slate-300">
+          <Loader2 className="h-4 w-4 animate-spin" /> Chargement…
+        </div>
+      ) : (
+        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
+          {stages.map((s, i) => (
+            <div
+              key={s.label}
+              className="rounded-2xl border border-slate-800 bg-slate-950/85 p-4"
+            >
+              <p className="text-[10px] uppercase tracking-[0.18em] text-slate-500">
+                Étape {i + 1}
+              </p>
+              <p className={`mt-1 text-2xl font-bold tracking-[-0.04em] ${s.tone}`}>
+                {s.value.toLocaleString("fr-FR")}
+              </p>
+              <p className="mt-1 text-xs text-slate-400">{s.label}</p>
+            </div>
+          ))}
+        </div>
+      )}
+      {data && (
+        <div className="mt-4 grid grid-cols-1 gap-2 text-xs text-slate-400 sm:grid-cols-3">
+          <div>
+            1h: <span className="text-slate-200">{data.last1h.subscribesSent}</span> Subscribe ·{" "}
+            <span className="text-slate-200">{data.last1h.botStarts}</span> /start
+          </div>
+          <div>
+            24h: <span className="text-slate-200">{data.last24h.subscribesSent}</span> Subscribe ·{" "}
+            <span className="text-slate-200">{data.last24h.botStarts}</span> /start
+          </div>
+          <div>
+            7j: <span className="text-slate-200">{data.last7d.subscribesSent}</span> Subscribe ·{" "}
+            <span className="text-slate-200">{data.last7d.botStarts}</span> /start
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function RollingJoinsStrip({ rolling }: { rolling: TelegramOverviewData["rollingJoins"] | undefined }) {
+  if (!rolling) return null;
+  const cells = [
+    { label: "Joins 1h", funnel: rolling.last1h, all: rolling.last1hAll, tone: "text-emerald-300" },
+    { label: "Joins 6h", funnel: rolling.last6h, all: rolling.last6hAll, tone: "text-cyan-300" },
+    { label: "Joins 24h", funnel: rolling.last24h, all: rolling.last24hAll, tone: "text-violet-300" },
+    { label: "Joins aujourd’hui", funnel: rolling.today, all: rolling.todayAll, tone: "text-amber-300" },
+  ];
+  return (
+    <Card className="lg:col-span-12 border-slate-800 bg-slate-900/95">
+      <div className="flex items-center gap-2 text-amber-300">
+        <TrendingUp className="h-4 w-4 text-emerald-400" />
+        <h3 className="text-lg font-semibold tracking-[-0.03em]">Joins en fenêtre glissante</h3>
+      </div>
+      <p className="mt-2 text-sm leading-6 text-slate-400">
+        Volume du funnel (hors bypass) à gauche · volume total (bypass inclus) à droite.
+      </p>
+      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {cells.map((c) => (
+          <div key={c.label} className="rounded-2xl border border-slate-800 bg-slate-950/85 p-4">
+            <p className="text-[10px] uppercase tracking-[0.18em] text-slate-500">{c.label}</p>
+            <p className={`mt-1 text-2xl font-bold tracking-[-0.04em] ${c.tone}`}>
+              {c.funnel.toLocaleString("fr-FR")}
+            </p>
+            <p className="mt-1 text-xs text-slate-400">
+              total: <span className="text-slate-200">{c.all.toLocaleString("fr-FR")}</span>
+            </p>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function AttributionBreakdown({ stats }: { stats: TelegramOverviewData["joinStats"] | undefined }) {
+  if (!stats) return null;
+  const cells = [
+    { label: "Total joins", value: stats.totalJoins, tone: "text-slate-100" },
+    { label: "Funnel joins", value: stats.funnelJoins ?? 0, tone: "text-emerald-300" },
+    { label: "Attributed", value: stats.attributedJoins ?? 0, tone: "text-cyan-300" },
+    { label: "Unattributed", value: stats.unattributedJoins ?? 0, tone: "text-violet-300" },
+    { label: "Bypass", value: stats.bypassJoins ?? 0, tone: "text-amber-300" },
+  ];
+  return (
+    <Card className="lg:col-span-6 border-emerald-500/40 bg-[radial-gradient(circle_at_top_left,rgba(34,197,94,0.14),transparent_40%),#111827]">
+      <div className="flex items-center gap-2 text-amber-300">
+        <Users className="h-4 w-4 text-emerald-400" />
+        <h3 className="text-lg font-semibold tracking-[-0.03em]">Attribution des joins</h3>
+      </div>
+      <p className="mt-2 text-sm leading-6 text-slate-400">
+        Décomposition par statut d’attribution. Bypass devrait tendre vers 0 maintenant que le canal est gated par chat_join_request.
+      </p>
+      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
+        {cells.map((c) => (
+          <div key={c.label} className="rounded-2xl border border-slate-800 bg-slate-950/85 p-3">
+            <p className="text-[10px] uppercase tracking-[0.18em] text-slate-500">{c.label}</p>
+            <p className={`mt-1 text-xl font-bold tracking-[-0.04em] ${c.tone}`}>
+              {c.value.toLocaleString("fr-FR")}
+            </p>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function DecisionAnalyticsCard({ stats }: { stats: TelegramOverviewData["decisionStats"] | undefined }) {
+  if (!stats) return null;
+  const cells = [
+    { label: "Approuvés aujourd’hui", value: stats.todayApproved, tone: "text-emerald-300" },
+    { label: "Refusés aujourd’hui", value: stats.todayDeclined, tone: "text-rose-300" },
+    { label: "Tentatives bypass aujourd’hui", value: stats.bypassAttemptsToday, tone: "text-amber-300" },
+    { label: "Tentatives bypass total", value: stats.bypassAttemptsTotal, tone: "text-amber-200" },
+    { label: "Approuvés 1h", value: stats.last1hApproved, tone: "text-emerald-200" },
+    { label: "Refusés 1h", value: stats.last1hDeclined, tone: "text-rose-200" },
+  ];
+  return (
+    <Card className="lg:col-span-6 border-cyan-500/40 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.14),transparent_40%),#111827]">
+      <div className="flex items-center gap-2 text-amber-300">
+        <ShieldCheck className="h-4 w-4 text-cyan-400" />
+        <h3 className="text-lg font-semibold tracking-[-0.03em]">Approbations · Refus · Bypass bloqués</h3>
+      </div>
+      <p className="mt-2 text-sm leading-6 text-slate-400">
+        Décisions du bot sur chaque chat_join_request. Un refus = un user qui a tenté d’entrer sans /start (bypass tenté, gated par le bot).
+      </p>
+      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+        {cells.map((c) => (
+          <div key={c.label} className="rounded-2xl border border-slate-800 bg-slate-950/85 p-3">
+            <p className="text-[10px] uppercase tracking-[0.18em] text-slate-500">{c.label}</p>
+            <p className={`mt-1 text-xl font-bold tracking-[-0.04em] ${c.tone}`}>
+              {c.value.toLocaleString("fr-FR")}
+            </p>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+const ACTIVITY_KIND_META: Record<
+  string,
+  { label: string; tone: string; ringTone: string; icon: LucideIcon }
+> = {
+  bot_start: { label: "/start", tone: "text-amber-300", ringTone: "ring-amber-400/40", icon: Radio },
+  approve: { label: "approved", tone: "text-emerald-300", ringTone: "ring-emerald-400/40", icon: ShieldCheck },
+  decline: { label: "declined", tone: "text-rose-300", ringTone: "ring-rose-400/40", icon: ShieldCheck },
+  join: { label: "joined", tone: "text-cyan-300", ringTone: "ring-cyan-400/40", icon: UserPlus },
+  subscribe: { label: "Subscribe", tone: "text-violet-300", ringTone: "ring-violet-400/40", icon: TrendingUp },
+};
+
+function ActivityFeedPanel({
+  entries,
+  loading,
+}: {
+  entries: ActivityFeedData["entries"];
+  loading: boolean;
+}) {
+  return (
+    <Card className="lg:col-span-12 border-violet-500/40 bg-[radial-gradient(circle_at_top_left,rgba(168,85,247,0.14),transparent_40%),#111827] shadow-[0_0_0_1px_rgba(168,85,247,0.08),0_0_30px_rgba(168,85,247,0.08)]">
+      <div className="flex items-center gap-2 text-amber-300">
+        <Activity className="h-4 w-4 text-violet-400" />
+        <h3 className="text-lg font-semibold tracking-[-0.03em]">Live activity feed</h3>
+      </div>
+      <p className="mt-2 text-sm leading-6 text-slate-400">
+        Flux unifié et chronologique des bot_starts, joins, approbations, refus et envois Subscribe. Rafraîchi toutes les 10s.
+      </p>
+      {loading ? (
+        <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-slate-700 bg-slate-950/80 px-4 py-2 text-sm text-slate-300">
+          <Loader2 className="h-4 w-4 animate-spin" /> Chargement du feed…
+        </div>
+      ) : entries.length === 0 ? (
+        <p className="mt-4 text-sm text-slate-400">Aucune activité enregistrée pour l’instant.</p>
+      ) : (
+        <div className="mt-4 max-h-[480px] space-y-2 overflow-y-auto pr-1">
+          {entries.map((e, idx) => {
+            const meta = ACTIVITY_KIND_META[e.kind] || ACTIVITY_KIND_META.join;
+            const Icon = meta.icon;
+            const name =
+              e.telegramUsername || e.telegramFirstName || (e.telegramUserId ?? "anonyme");
+            return (
+              <div
+                key={`${e.kind}-${e.telegramUserId ?? "x"}-${idx}-${e.metaEventId ?? ""}`}
+                className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-950/70 p-3"
+              >
+                <span
+                  className={`inline-flex h-8 w-8 items-center justify-center rounded-lg ring-1 ${meta.ringTone} ${meta.tone}`}
+                >
+                  <Icon className="h-4 w-4" />
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-slate-200">
+                    <span className={meta.tone}>{meta.label}</span>{" "}
+                    <span className="text-slate-400">·</span>{" "}
+                    <span className="truncate">{name}</span>
+                    {e.attributionStatus ? (
+                      <span className="ml-2 rounded-full bg-slate-900/80 px-2 py-[2px] text-[10px] uppercase tracking-wider text-slate-400 ring-1 ring-slate-700">
+                        {e.attributionStatus}
+                      </span>
+                    ) : null}
+                    {e.metaStatus ? (
+                      <span className="ml-2 rounded-full bg-slate-900/80 px-2 py-[2px] text-[10px] uppercase tracking-wider text-slate-400 ring-1 ring-slate-700">
+                        meta: {e.metaStatus}
+                      </span>
+                    ) : null}
+                    {e.reason ? (
+                      <span className="ml-2 rounded-full bg-rose-950/40 px-2 py-[2px] text-[10px] uppercase tracking-wider text-rose-300 ring-1 ring-rose-500/30">
+                        {e.reason}
+                      </span>
+                    ) : null}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {formatRelativeTime(e.occurredAt)}
+                    {e.telegramUserId ? <> · uid={e.telegramUserId}</> : null}
+                  </p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+type MetaStatusFilter = "all" | "queued" | "sent" | "failed" | "retrying" | "abandoned";
+type MetaEventTypeFilter = "all" | "PageView" | "Lead" | "Subscribe";
+
+function FilteredMetaEventsPanel({
+  data,
+  filter,
+  onFilterChange,
+  loading,
+}: {
+  data: MetaEventsData | null;
+  filter: { status: MetaStatusFilter; eventType: MetaEventTypeFilter };
+  onFilterChange: (f: { status: MetaStatusFilter; eventType: MetaEventTypeFilter }) => void;
+  loading: boolean;
+}) {
+  return (
+    <Card className="lg:col-span-12 border-yellow-500/40 bg-[radial-gradient(circle_at_top_left,rgba(234,179,8,0.12),transparent_40%),#111827]">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-amber-300">
+          <Eye className="h-4 w-4 text-yellow-400" />
+          <h3 className="text-lg font-semibold tracking-[-0.03em]">Meta events log (filtré)</h3>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <select
+            value={filter.status}
+            onChange={(ev) =>
+              onFilterChange({ ...filter, status: ev.target.value as MetaStatusFilter })
+            }
+            className="rounded-full border border-slate-700 bg-slate-950/80 px-3 py-1 text-slate-200"
+          >
+            {(["all", "queued", "sent", "failed", "retrying", "abandoned"] as const).map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+          <select
+            value={filter.eventType}
+            onChange={(ev) =>
+              onFilterChange({ ...filter, eventType: ev.target.value as MetaEventTypeFilter })
+            }
+            className="rounded-full border border-slate-700 bg-slate-950/80 px-3 py-1 text-slate-200"
+          >
+            {(["all", "PageView", "Lead", "Subscribe"] as const).map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+      <p className="mt-2 text-sm leading-6 text-slate-400">
+        Journal complet des envois Meta CAPI avec filtre par statut + type. Cherche les ‘failed’ ou ‘retrying’ persistents pour détecter une panne pixel ou token.
+      </p>
+      {loading ? (
+        <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-slate-700 bg-slate-950/80 px-4 py-2 text-sm text-slate-300">
+          <Loader2 className="h-4 w-4 animate-spin" /> Chargement…
+        </div>
+      ) : !data || data.rows.length === 0 ? (
+        <p className="mt-4 text-sm text-slate-400">Aucun événement ne correspond à ce filtre.</p>
+      ) : (
+        <div className="mt-4 max-h-[480px] overflow-y-auto pr-1">
+          <table className="w-full text-left text-xs">
+            <thead className="sticky top-0 bg-slate-950/90 text-slate-400">
+              <tr>
+                <th className="py-2">When</th>
+                <th>Type</th>
+                <th>Scope</th>
+                <th>Status</th>
+                <th>HTTP</th>
+                <th>Attempts</th>
+                <th>Error</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.rows.map((r) => (
+                <tr key={r.eventId} className="border-t border-slate-800/70">
+                  <td className="py-2 text-slate-400">{formatRelativeTime(r.updatedAt || r.createdAt)}</td>
+                  <td className="text-slate-200">{r.eventType}</td>
+                  <td className="text-slate-300">{r.eventScope}</td>
+                  <td>
+                    <span
+                      className={`rounded-full px-2 py-[2px] text-[10px] uppercase tracking-wider ring-1 ${
+                        r.status === "sent"
+                          ? "bg-emerald-950/40 text-emerald-300 ring-emerald-500/30"
+                          : r.status === "failed" || r.status === "abandoned"
+                            ? "bg-rose-950/40 text-rose-300 ring-rose-500/30"
+                            : r.status === "retrying"
+                              ? "bg-amber-950/40 text-amber-300 ring-amber-500/30"
+                              : "bg-slate-900/80 text-slate-400 ring-slate-700"
+                      }`}
+                    >
+                      {r.status}
+                    </span>
+                  </td>
+                  <td className="text-slate-300">{r.httpStatus ?? "—"}</td>
+                  <td className="text-slate-300">{r.attemptCount}</td>
+                  <td className="max-w-[280px] truncate text-rose-300/80" title={r.errorMessage || undefined}>
+                    {r.errorMessage || "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {data && data.breakdown.length > 0 && (
+        <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Erreurs Meta — 24 dernières heures</p>
+          <ul className="mt-2 space-y-1 text-xs text-slate-300">
+            {data.breakdown.slice(0, 5).map((b, i) => (
+              <li key={`${b.errorCode}-${i}`} className="flex items-center justify-between gap-3">
+                <span className="truncate">
+                  <span className="text-rose-300">{b.errorCode}</span>{" "}
+                  <span className="text-slate-500">·</span> HTTP {b.httpStatus} · {b.sampleMessage}
+                </span>
+                <span className="rounded-full bg-slate-900/80 px-2 py-[2px] text-[10px] text-slate-400 ring-1 ring-slate-700">
+                  ×{b.occurrences}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function RecentDecisionsList({
+  rows,
+  loading,
+}: {
+  rows: Array<{
+    id: number;
+    telegramUserId: string;
+    telegramUsername: string | null;
+    telegramFirstName: string | null;
+    decision: "approved" | "declined";
+    reason: string | null;
+    hadBotStart: number;
+    inviteLinkName: string | null;
+    decidedAt: string | Date;
+  }>;
+  loading: boolean;
+}) {
+  return (
+    <Card className="lg:col-span-12 border-rose-500/30 bg-[radial-gradient(circle_at_top_left,rgba(244,63,94,0.10),transparent_40%),#111827]">
+      <div className="flex items-center gap-2 text-amber-300">
+        <ShieldCheck className="h-4 w-4 text-rose-400" />
+        <h3 className="text-lg font-semibold tracking-[-0.03em]">Décisions chat_join_request</h3>
+      </div>
+      <p className="mt-2 text-sm leading-6 text-slate-400">
+        Chaque ligne = une décision du bot sur une demande de join. `no_bot_start` = tentative de bypass bloquée.
+      </p>
+      {loading ? (
+        <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-slate-700 bg-slate-950/80 px-4 py-2 text-sm text-slate-300">
+          <Loader2 className="h-4 w-4 animate-spin" /> Chargement…
+        </div>
+      ) : rows.length === 0 ? (
+        <p className="mt-4 text-sm text-slate-400">
+          Aucune demande de join encore traitée par le bot. Un événement apparaîtra ici dès qu’un user clique sur un lien d’invitation gated.
+        </p>
+      ) : (
+        <div className="mt-4 max-h-[360px] space-y-2 overflow-y-auto pr-1">
+          {rows.map((r) => (
+            <div
+              key={r.id}
+              className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-950/70 p-3 text-sm"
+            >
+              <span
+                className={`rounded-full px-2 py-[2px] text-[10px] uppercase tracking-wider ring-1 ${
+                  r.decision === "approved"
+                    ? "bg-emerald-950/40 text-emerald-300 ring-emerald-500/30"
+                    : "bg-rose-950/40 text-rose-300 ring-rose-500/30"
+                }`}
+              >
+                {r.decision}
+              </span>
+              <span className="flex-1 min-w-0 truncate text-slate-200">
+                {r.telegramUsername || r.telegramFirstName || `uid:${r.telegramUserId}`}
+              </span>
+              {r.reason ? (
+                <span className="rounded-full bg-slate-900/80 px-2 py-[2px] text-[10px] text-slate-400 ring-1 ring-slate-700">
+                  {r.reason}
+                </span>
+              ) : null}
+              <span className="text-xs text-slate-500">{formatRelativeTime(r.decidedAt)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export default function Dashboard() {
   const [password, setPassword] = useState("");
   const [token, setToken] = useState<string>(() => {
@@ -745,6 +1297,47 @@ export default function Dashboard() {
       refetchOnWindowFocus: true,
     },
   );
+  const [funnelWindow, setFunnelWindow] = useState<"last1h" | "last24h" | "today" | "last7d">("today");
+  const funnelSnapshotQuery = trpc.dashboard.funnelSnapshot.useQuery(
+    { token, window: funnelWindow },
+    {
+      enabled: Boolean(token),
+      retry: false,
+      refetchInterval: 10_000,
+      refetchOnWindowFocus: true,
+    },
+  );
+  const activityFeedQuery = trpc.dashboard.activityFeed.useQuery(
+    { token, limit: 50 },
+    {
+      enabled: Boolean(token),
+      retry: false,
+      refetchInterval: 10_000,
+      refetchOnWindowFocus: true,
+    },
+  );
+  const recentJoinDecisionsQuery = trpc.dashboard.recentJoinDecisions.useQuery(
+    { token, limit: 25 },
+    {
+      enabled: Boolean(token),
+      retry: false,
+      refetchInterval: 10_000,
+      refetchOnWindowFocus: true,
+    },
+  );
+  const [metaEventsFilter, setMetaEventsFilter] = useState<{
+    status: "all" | "queued" | "sent" | "failed" | "retrying" | "abandoned";
+    eventType: "all" | "PageView" | "Lead" | "Subscribe";
+  }>({ status: "all", eventType: "all" });
+  const metaEventsQuery = trpc.dashboard.metaEvents.useQuery(
+    { token, status: metaEventsFilter.status, eventType: metaEventsFilter.eventType, limit: 50 },
+    {
+      enabled: Boolean(token),
+      retry: false,
+      refetchInterval: 15_000,
+      refetchOnWindowFocus: true,
+    },
+  );
   const updateSettingMutation = trpc.dashboard.updateSetting.useMutation();
 
   useEffect(() => {
@@ -792,6 +1385,17 @@ export default function Dashboard() {
   const metaStatus = rawMetaStatus && !("error" in rawMetaStatus) ? rawMetaStatus : null;
   const subscriberLog = rawSubscriberLog && !("error" in rawSubscriberLog) ? rawSubscriberLog.rows : [];
   const telegramOverview = rawTelegramOverview && !("error" in rawTelegramOverview) ? rawTelegramOverview : null;
+  const rawFunnelSnapshot = funnelSnapshotQuery.data as FunnelSnapshotData | { error: string } | undefined;
+  const funnelSnapshot = rawFunnelSnapshot && !("error" in rawFunnelSnapshot) ? rawFunnelSnapshot : null;
+  const rawActivityFeed = activityFeedQuery.data as ActivityFeedData | { error: string } | undefined;
+  const activityFeed = rawActivityFeed && !("error" in rawActivityFeed) ? rawActivityFeed.entries : [];
+  const rawRecentDecisions = recentJoinDecisionsQuery.data as
+    | { rows: Array<{ id: number; telegramUserId: string; telegramUsername: string | null; telegramFirstName: string | null; channelId: string; decision: "approved" | "declined"; reason: string | null; hadBotStart: number; inviteLinkName: string | null; decidedAt: string | Date }> }
+    | { error: string }
+    | undefined;
+  const recentDecisions = rawRecentDecisions && !("error" in rawRecentDecisions) ? rawRecentDecisions.rows : [];
+  const rawMetaEvents = metaEventsQuery.data as MetaEventsData | { error: string } | undefined;
+  const metaEvents = rawMetaEvents && !("error" in rawMetaEvents) ? rawMetaEvents : null;
 
   const recentJoinedMembers = subscriberLog.filter((row) => Boolean(row.joinedAt)).slice(0, 5);
 
@@ -1498,6 +2102,24 @@ export default function Dashboard() {
                 )}
               </div>
             </Card>
+
+            <FunnelSnapshotPanel
+              data={funnelSnapshot}
+              window={funnelWindow}
+              onWindowChange={setFunnelWindow}
+              loading={funnelSnapshotQuery.isLoading}
+            />
+            <RollingJoinsStrip rolling={telegramOverview?.rollingJoins} />
+            <AttributionBreakdown stats={telegramOverview?.joinStats} />
+            <DecisionAnalyticsCard stats={telegramOverview?.decisionStats} />
+            <ActivityFeedPanel entries={activityFeed} loading={activityFeedQuery.isLoading} />
+            <RecentDecisionsList rows={recentDecisions} loading={recentJoinDecisionsQuery.isLoading} />
+            <FilteredMetaEventsPanel
+              data={metaEvents}
+              filter={metaEventsFilter}
+              onFilterChange={setMetaEventsFilter}
+              loading={metaEventsQuery.isLoading}
+            />
 
             <Card className="lg:col-span-12 border-emerald-500/40 bg-[radial-gradient(circle_at_top_left,rgba(34,197,94,0.16),transparent_40%),#111827] shadow-[0_0_0_1px_rgba(34,197,94,0.10),0_0_30px_rgba(34,197,94,0.10)]">
               <div className="flex items-center gap-2 text-amber-300">
