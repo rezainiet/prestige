@@ -11,12 +11,14 @@ import {
   InsertMetaEventLog,
   InsertSiteSetting,
   InsertTelegramJoin,
+  InsertTelegramJoinRequestAudit,
   InsertTelegramLinkage,
   InsertTrackingEvent,
   InsertUser,
   InsertUtmSession,
   metaEventLogs,
   siteSettings,
+  telegramJoinRequestAudit,
   telegramJoins,
   telegramLinkages,
   telegramUpdateLog,
@@ -1053,6 +1055,89 @@ export async function setBotStartPersonalInviteLink(
       personalInviteLinkExpiresAt: expiresAt,
     })
     .where(eq(botStarts.telegramUserId, telegramUserId));
+}
+
+// Returns the cached personal invite link for a user IF it hasn't expired
+// (with a 1h safety margin). Reminders and welcomes both call this so they
+// always ship a join-request URL — never the static admin link.
+export async function getValidPersonalInviteLink(telegramUserId: string): Promise<string | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select({
+      personalInviteLink: botStarts.personalInviteLink,
+      personalInviteLinkExpiresAt: botStarts.personalInviteLinkExpiresAt,
+    })
+    .from(botStarts)
+    .where(eq(botStarts.telegramUserId, telegramUserId))
+    .limit(1);
+  const row = rows[0];
+  if (!row?.personalInviteLink) return null;
+  const expiresAt = row.personalInviteLinkExpiresAt
+    ? new Date(row.personalInviteLinkExpiresAt)
+    : null;
+  if (!expiresAt) return row.personalInviteLink;
+  // 1h safety margin so we don't hand out a link about to expire mid-message.
+  if (expiresAt.getTime() - Date.now() <= 60 * 60 * 1000) return null;
+  return row.personalInviteLink;
+}
+
+// Persist BEFORE we trust the log to be the source of truth — the audit row
+// is what dashboards count. Tolerates Telegram API blips: callers record
+// `approved` even with `reason='api_error:...'` so the count still increments.
+export async function recordJoinRequestDecision(input: InsertTelegramJoinRequestAudit) {
+  const db = await getDb();
+  if (!db) return;
+  await db.insert(telegramJoinRequestAudit).values(input);
+}
+
+export async function getJoinRequestDecisionStats() {
+  const db = await getDb();
+  if (!db) {
+    return {
+      totalApproved: 0,
+      totalDeclined: 0,
+      todayApproved: 0,
+      todayDeclined: 0,
+      last1hApproved: 0,
+      last1hDeclined: 0,
+      last24hApproved: 0,
+      last24hDeclined: 0,
+      bypassAttemptsTotal: 0,
+      bypassAttemptsToday: 0,
+    };
+  }
+
+  // bypassAttempts = declined-because-no-bot-start (hadBotStart=0). The
+  // webhook only declines for that one reason today, but we still gate on
+  // hadBotStart so the metric stays accurate if reasons widen later.
+  const [rows]: any = await db.execute(sql`
+    SELECT
+      COALESCE(SUM(CASE WHEN decision='approved' THEN 1 ELSE 0 END),0) AS totalApproved,
+      COALESCE(SUM(CASE WHEN decision='declined' THEN 1 ELSE 0 END),0) AS totalDeclined,
+      COALESCE(SUM(CASE WHEN decision='approved' AND DATE(decidedAt)=CURRENT_DATE() THEN 1 ELSE 0 END),0) AS todayApproved,
+      COALESCE(SUM(CASE WHEN decision='declined' AND DATE(decidedAt)=CURRENT_DATE() THEN 1 ELSE 0 END),0) AS todayDeclined,
+      COALESCE(SUM(CASE WHEN decision='approved' AND decidedAt >= NOW() - INTERVAL 1 HOUR THEN 1 ELSE 0 END),0) AS last1hApproved,
+      COALESCE(SUM(CASE WHEN decision='declined' AND decidedAt >= NOW() - INTERVAL 1 HOUR THEN 1 ELSE 0 END),0) AS last1hDeclined,
+      COALESCE(SUM(CASE WHEN decision='approved' AND decidedAt >= NOW() - INTERVAL 24 HOUR THEN 1 ELSE 0 END),0) AS last24hApproved,
+      COALESCE(SUM(CASE WHEN decision='declined' AND decidedAt >= NOW() - INTERVAL 24 HOUR THEN 1 ELSE 0 END),0) AS last24hDeclined,
+      COALESCE(SUM(CASE WHEN decision='declined' AND hadBotStart=0 THEN 1 ELSE 0 END),0) AS bypassAttemptsTotal,
+      COALESCE(SUM(CASE WHEN decision='declined' AND hadBotStart=0 AND DATE(decidedAt)=CURRENT_DATE() THEN 1 ELSE 0 END),0) AS bypassAttemptsToday
+    FROM telegram_join_request_audit
+  `);
+  const r = rows?.[0] || {};
+  return {
+    totalApproved: Number(r.totalApproved || 0),
+    totalDeclined: Number(r.totalDeclined || 0),
+    todayApproved: Number(r.todayApproved || 0),
+    todayDeclined: Number(r.todayDeclined || 0),
+    last1hApproved: Number(r.last1hApproved || 0),
+    last1hDeclined: Number(r.last1hDeclined || 0),
+    last24hApproved: Number(r.last24hApproved || 0),
+    last24hDeclined: Number(r.last24hDeclined || 0),
+    bypassAttemptsTotal: Number(r.bypassAttemptsTotal || 0),
+    bypassAttemptsToday: Number(r.bypassAttemptsToday || 0),
+  };
 }
 
 export async function getSetting(settingKey: string) {

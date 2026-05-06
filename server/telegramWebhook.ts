@@ -14,6 +14,7 @@ import {
   hasSentSubscribeForTelegramUser,
   insertTelegramJoin,
   markBotStartJoined,
+  recordJoinRequestDecision,
   resolveTelegramLinkage,
   setBotStartPersonalInviteLink,
   tryRecordTelegramUpdateId,
@@ -235,12 +236,25 @@ async function fireSubscribeForStart(args: {
   }
   // Cross-path dedupe: a bypass-join Subscribe may have fired before this
   // user ever ran /start. Skip Meta in that case so we never send two
-  // Subscribes for the same Telegram user.
+  // Subscribes for the same Telegram user. Mirror the prior `sent` status
+  // onto bot_starts so the dashboard's per-user view stops showing 'pending'
+  // for users we already converted via the join scope.
   if (await hasSentSubscribeForTelegramUser(args.telegramUserId)) {
     log.info("telegramWebhook", "subscribe_skipped_already_sent_for_user", {
       telegramUserId: args.telegramUserId,
       origin: "start",
     });
+    // Earlier guards already returned for status === 'sent' / queued / failed
+    // / retrying — by here, status is 'pending' or 'abandoned' (or no row).
+    // Either way we want to mirror it to 'sent' so the dashboard reflects the
+    // join-scope Subscribe.
+    if (existing) {
+      await updateBotStartMetaStatus(
+        args.telegramUserId,
+        "sent",
+        existing.metaSubscribeEventId || undefined,
+      );
+    }
     return;
   }
 
@@ -694,16 +708,21 @@ export function setupTelegramWebhook(app: Express) {
       // this URL routes through chat_join_request → bot approves only users
       // with a bot_starts row. We cache the link on the bot_starts row so
       // re-/start AND the full reminder sequence reuse the same URL within the
-      // 30-day expiry. Falls back to the static admin group URL only on
-      // Telegram API failure — preferable to blocking the welcome flow.
+      // 30-day expiry.
+      //
+      // We DELIBERATELY do not fall back to the static admin group URL: the
+      // static URL is an open invite that bypasses the bot gate entirely, and
+      // shipping it in the welcome would re-open the leak we just closed. If
+      // Telegram refuses to mint a personal link after one retry, we send a
+      // text-only "try /start again" message and let the next /start (or the
+      // reminder worker) heal — much rarer failure mode than the leak it
+      // replaces.
       const channelId = process.env.TELEGRAM_CHANNEL_ID || "";
-      const [welcomeMsg, staticGroupUrl, freshBotStart] = await Promise.all([
+      const [welcomeMsg, freshBotStart] = await Promise.all([
         getSetting("welcome_message"),
-        getTelegramGroupUrl(),
         getBotStartByTelegramUserId(userId),
       ]);
 
-      let groupUrl = staticGroupUrl;
       const cachedLink = freshBotStart?.personalInviteLink || null;
       const cachedExpiresAt = freshBotStart?.personalInviteLinkExpiresAt
         ? new Date(freshBotStart.personalInviteLinkExpiresAt)
@@ -713,16 +732,30 @@ export function setupTelegramWebhook(app: Express) {
         cachedExpiresAt &&
         cachedExpiresAt.getTime() - Date.now() > 60 * 60 * 1000; // 1h safety margin.
 
+      let groupUrl: string | null = null;
       if (cacheStillValid && cachedLink) {
         groupUrl = cachedLink;
         log.info("telegramWebhook", "personal_invite_link_reused_from_cache", {
           telegramUserId: userId,
         });
       } else if (channelId) {
-        const personal = await createPersonalInviteLink({
+        // One retry covers a Telegram API blip without making /start latency
+        // visibly worse. After two failures we accept the rare "ask user to
+        // /start again" path rather than ship the static fallback URL.
+        let personal = await createPersonalInviteLink({
           chatId: channelId,
           telegramUserId: userId,
         });
+        if (!personal.ok) {
+          log.warn("telegramWebhook", "personal_invite_link_failed_retrying", {
+            telegramUserId: userId,
+            error: personal.error,
+          });
+          personal = await createPersonalInviteLink({
+            chatId: channelId,
+            telegramUserId: userId,
+          });
+        }
         if (personal.ok) {
           groupUrl = personal.inviteLink;
           await setBotStartPersonalInviteLink(userId, personal.inviteLink, personal.expiresAt);
@@ -731,11 +764,21 @@ export function setupTelegramWebhook(app: Express) {
             expiresAt: personal.expiresAt.toISOString(),
           });
         } else {
-          log.warn("telegramWebhook", "personal_invite_link_failed_using_static", {
+          log.error("telegramWebhook", "personal_invite_link_failed_no_static_fallback", {
             telegramUserId: userId,
             error: personal.error,
           });
         }
+      }
+
+      if (!groupUrl) {
+        // No personal link could be minted — do NOT ship the static URL.
+        // Send a transient retry message; the next /start regenerates.
+        await sendTelegramMessage(
+          telegramMessage.from.id,
+          "Petit souci technique 🔧 Renvoie /start dans 60 secondes pour recevoir ton accès au groupe privé Prestige 🌐",
+        );
+        return;
       }
 
       await scheduleTelegramReminderSequence({
@@ -793,6 +836,9 @@ export function setupTelegramWebhook(app: Express) {
   async function handleChatJoinRequest(req: TelegramChatJoinRequest) {
     const telegramUserId = String(req.from.id);
     const channelId = String(req.chat.id);
+    const username = req.from.username || null;
+    const firstName = req.from.first_name || null;
+    const inviteLinkName = req.invite_link?.name || null;
 
     const botStart = await getBotStartByTelegramUserId(telegramUserId);
     if (botStart) {
@@ -800,12 +846,25 @@ export function setupTelegramWebhook(app: Express) {
         chatId: channelId,
         telegramUserId,
       });
+      // Audit row goes in regardless of the Telegram API outcome — the
+      // dashboard counts the decision the bot made, with `reason` carrying
+      // any downstream API error so we can debug without losing the count.
+      await recordJoinRequestDecision({
+        telegramUserId,
+        telegramUsername: username,
+        telegramFirstName: firstName,
+        channelId,
+        decision: "approved",
+        reason: result.ok ? null : `api_error:${result.error}`.slice(0, 128),
+        hadBotStart: 1,
+        inviteLinkName,
+      });
       if (result.ok) {
         log.info("telegramWebhook", "join_request_approved", {
           telegramUserId,
           channelId,
-          username: req.from.username || null,
-          inviteLinkName: req.invite_link?.name || null,
+          username,
+          inviteLinkName,
           attribution: botStart.attributionStatus,
         });
       } else {
@@ -822,11 +881,21 @@ export function setupTelegramWebhook(app: Express) {
       chatId: channelId,
       telegramUserId,
     });
+    await recordJoinRequestDecision({
+      telegramUserId,
+      telegramUsername: username,
+      telegramFirstName: firstName,
+      channelId,
+      decision: "declined",
+      reason: "no_bot_start",
+      hadBotStart: 0,
+      inviteLinkName,
+    });
     log.warn("telegramWebhook", "join_request_declined_no_bot_start", {
       telegramUserId,
       channelId,
-      username: req.from.username || null,
-      inviteLinkName: req.invite_link?.name || null,
+      username,
+      inviteLinkName,
       declineOk: result.ok,
       declineError: result.ok ? null : result.error,
     });

@@ -2,8 +2,17 @@ import { and, asc, eq, lte, or, sql } from "drizzle-orm";
 import { botStarts, telegramReminderJobs } from "../drizzle/schema";
 import { tryAcquireLease } from "./_core/leaderLease";
 import { log } from "./_core/logger";
-import { getDb, getSetting } from "./db";
-import { buildJoinGroupKeyboard, sendTelegramMessage } from "./telegramBot";
+import {
+  getDb,
+  getSetting,
+  getValidPersonalInviteLink,
+  setBotStartPersonalInviteLink,
+} from "./db";
+import {
+  buildJoinGroupKeyboard,
+  createPersonalInviteLink,
+  sendTelegramMessage,
+} from "./telegramBot";
 import {
   DEFAULT_TELEGRAM_GROUP_URL,
   getTelegramGroupUrl,
@@ -396,12 +405,37 @@ async function getBotStartState(telegramUserId: string) {
   return rows[0] || null;
 }
 
+// Resolve the per-user invite URL for a reminder send. Prefer the cached
+// personal link (minted at /start with creates_join_request=true). If it's
+// expired or absent, regenerate before sending so the keyboard button always
+// routes through the bot's chat_join_request gate. Returns null when no
+// personal link can be obtained — caller will skip the inline button rather
+// than ship the static admin URL, which would re-open the bypass.
+async function resolveReminderInviteUrl(telegramUserId: string): Promise<string | null> {
+  const cached = await getValidPersonalInviteLink(telegramUserId);
+  if (cached) return cached;
+
+  const channelId = process.env.TELEGRAM_CHANNEL_ID || "";
+  if (!channelId) return null;
+
+  const minted = await createPersonalInviteLink({ chatId: channelId, telegramUserId });
+  if (!minted.ok) {
+    log.warn("telegramReminders", "personal_invite_link_regenerate_failed", {
+      telegramUserId,
+      error: minted.error,
+    });
+    return null;
+  }
+  await setBotStartPersonalInviteLink(telegramUserId, minted.inviteLink, minted.expiresAt);
+  log.info("telegramReminders", "personal_invite_link_regenerated", {
+    telegramUserId,
+    expiresAt: minted.expiresAt.toISOString(),
+  });
+  return minted.inviteLink;
+}
+
 export async function processDueTelegramReminderJobs() {
   const jobs = await getDueTelegramReminderJobs();
-  // Resolve the group URL once per tick (it lives in site_settings) — reading
-  // it per job would multiply the DB hits without changing the result.
-  const groupUrl = jobs.length > 0 ? await getTelegramGroupUrl() : DEFAULT_TELEGRAM_GROUP_URL;
-  const replyMarkup = buildJoinGroupKeyboard(groupUrl);
 
   for (const job of jobs) {
     await markJobProcessing(job.id);
@@ -423,7 +457,14 @@ export async function processDueTelegramReminderJobs() {
       continue;
     }
 
-    const result = await sendTelegramMessage(job.chatId, job.messageText, { replyMarkup });
+    // Per-user resolution: cached link, else regenerate. The static admin URL
+    // is intentionally never used here. messageText was already baked with
+    // the correct personal URL at job-creation time; the inline button is
+    // the second surface where a stale/static link could leak.
+    const inviteUrl = await resolveReminderInviteUrl(job.telegramUserId);
+    const sendOptions = inviteUrl ? { replyMarkup: buildJoinGroupKeyboard(inviteUrl) } : {};
+
+    const result = await sendTelegramMessage(job.chatId, job.messageText, sendOptions);
 
     if (result.ok) {
       await markJobSent(job.id);
