@@ -262,3 +262,66 @@ export async function fireSubscribeEvent(data: CapiEventData): Promise<MetaSendR
   const payload = buildSubscribePayload(data);
   return postMetaPayload(data.eventId, payload);
 }
+
+/**
+ * WhatsApp-channel-click Lead. This is the new bottom-of-funnel conversion:
+ * the user has already Subscribed (on /start) and now clicked the personal
+ * /wa-go link from the bot DM. Built to mirror buildSubscribePayload so it
+ * shares external_id (hashed landing visitorId) with PageView/Subscribe and
+ * Meta can stitch the full funnel back to the original ad-driven visit.
+ */
+export function buildWhatsAppLeadPayload(data: CapiEventData) {
+  const externalIdSource = data.visitorId || String(data.telegramUserId);
+  const userData: Record<string, string> = {
+    external_id: hashValue(externalIdSource),
+  };
+
+  if (data.ipAddress) userData.client_ip_address = data.ipAddress;
+  if (data.userAgent) userData.client_user_agent = data.userAgent;
+  if (data.fbp) userData.fbp = data.fbp;
+
+  if (data.telegramFirstName) userData.fn = hashValue(data.telegramFirstName);
+  if (data.telegramLastName) userData.ln = hashValue(data.telegramLastName);
+
+  // Reconstruct fbc from the landing fbclid + session createdAt when the
+  // browser _fbp/_fbc cookie wasn't captured — same logic as Subscribe.
+  const fbc = buildServerFbc(data.fbclid, data.sessionCreatedAt);
+  if (fbc) userData.fbc = fbc;
+
+  const customData: Record<string, string> = {
+    content_name: "WhatsApp Channel Click",
+    click_source: "telegram_bot_dm",
+    currency: "EUR",
+    value: "0.00",
+  };
+
+  if (data.utmCampaign) customData.utm_campaign = data.utmCampaign;
+  if (data.utmSource) customData.utm_source = data.utmSource;
+  if (data.utmMedium) customData.utm_medium = data.utmMedium;
+  if (data.utmContent) customData.utm_content = data.utmContent;
+
+  const payload: Record<string, unknown> = {
+    data: [
+      {
+        event_name: "Lead",
+        event_time: data.eventTime,
+        event_id: data.eventId,
+        event_source_url: data.sourceUrl || DEFAULT_SOURCE_URL,
+        action_source: "website",
+        user_data: userData,
+        custom_data: customData,
+      },
+    ],
+  };
+
+  if (data.testEventCode) {
+    payload.test_event_code = data.testEventCode;
+  }
+
+  return payload;
+}
+
+export async function fireWhatsAppLeadEvent(data: CapiEventData): Promise<MetaSendResult> {
+  const payload = buildWhatsAppLeadPayload(data);
+  return postMetaPayload(data.eventId, payload);
+}

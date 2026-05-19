@@ -1041,6 +1041,22 @@ export async function markBotStartJoined(telegramUserId: string) {
     .where(eq(botStarts.telegramUserId, telegramUserId));
 }
 
+/**
+ * Atomically claim the first WhatsApp click for a user. `UPDATE … WHERE
+ * joinedAt IS NULL` is a single row-locked statement, so two concurrent
+ * /wa-go requests (or a double-click) can never both see joinedAt as null —
+ * exactly one gets affectedRows=1 and is allowed to fire the Lead + skip
+ * reminders. Returns true only for that first winning click.
+ */
+export async function markBotStartJoinedIfFirst(telegramUserId: string): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const [res]: any = await db.execute(
+    sql`UPDATE bot_starts SET joinedAt = NOW() WHERE telegramUserId = ${telegramUserId} AND joinedAt IS NULL`,
+  );
+  return Number(res?.affectedRows ?? 0) > 0;
+}
+
 export async function setBotStartPersonalInviteLink(
   telegramUserId: string,
   inviteLink: string,
@@ -2024,7 +2040,7 @@ export async function getFunnelSnapshot(window: FunnelWindow = "today"): Promise
   const [rows]: any = await db.execute(sql`
     SELECT
       (SELECT COUNT(*) FROM tracking_events WHERE eventType = 'pageview' AND createdAt ${w}) AS pageviews,
-      (SELECT COUNT(*) FROM tracking_events WHERE eventType = 'lead' AND createdAt ${w}) AS leads,
+      (SELECT COUNT(*) FROM meta_event_logs WHERE eventScope = 'whatsapp_click' AND status = 'sent' AND COALESCE(completedAt, createdAt) ${w}) AS leads,
       (SELECT COUNT(*) FROM bot_starts WHERE startedAt ${w}) AS botStarts,
       (SELECT COUNT(*) FROM telegram_join_request_audit WHERE decision = 'approved' AND decidedAt ${w}) AS approvedJoins,
       (SELECT COUNT(*) FROM meta_event_logs WHERE eventScope IN ('telegram_start','telegram_join') AND status = 'sent' AND COALESCE(completedAt, createdAt) ${w}) AS subscribesSent
