@@ -5,10 +5,29 @@ import {
   TrackingSession,
   buildFallbackTrackingSession,
   initAdvancedTracking,
+  trackTelegramClick,
   trackTelegramGroupClick,
 } from "@/lib/tracking";
 
 const FUNNEL_STORAGE_KEY = "misterb_funnel_token";
+
+// Private support / management contact (direct Telegram account, not the
+// funnel bot). Used by the "Me contacter" CTA and the floating contact
+// button. Conversion still flows through "Groupe Telegram" → bot → /wa-go.
+const PRIVATE_CONTACT_URL = "https://t.me/prest_original";
+
+async function trackAndOpenPrivateContact() {
+  // Fire the contact analytics event (telegram_click, eventSource=
+  // telegram_contact_cta) + Clarity, capped so a slow network never blocks
+  // the navigation, then open the direct contact in the same tab.
+  await Promise.race([
+    trackTelegramClick("telegram_contact_cta"),
+    new Promise<void>((resolve) => setTimeout(resolve, 250)),
+  ]);
+  if (typeof window !== "undefined") {
+    window.location.assign(PRIVATE_CONTACT_URL);
+  }
+}
 
 function readPersistedFunnelToken(): string {
   if (typeof window === "undefined") return "";
@@ -168,7 +187,6 @@ export default function Home() {
   const [activeIndex, setActiveIndex] = useState(0);
   const [isToastVisible, setIsToastVisible] = useState(false);
   const [telegramGroupHref, setTelegramGroupHref] = useState<string>(getTelegramGroupHref());
-  const [telegramContactHref, setTelegramContactHref] = useState<string>(getTelegramGroupHref());
   const [hasMounted, setHasMounted] = useState(false);
 
   useEffect(() => {
@@ -180,7 +198,6 @@ export default function Home() {
     void initAdvancedTracking().then((session) => {
       const href = getTelegramGroupHref(session);
       setTelegramGroupHref(href);
-      setTelegramContactHref(href);
     });
   }, []);
 
@@ -322,20 +339,16 @@ export default function Home() {
               }}
             />
             <CtaButton
-              href={telegramContactHref}
+              href={PRIVATE_CONTACT_URL}
               label="Me contacter"
               variant="secondary"
               openInSameTab
               onTrack={async (event) => {
                 event.preventDefault();
-                // Route through trackTelegramGroupClick so the same
-                // funnel-token / session-token payload is appended to ?start=,
-                // ensuring /start fires Subscribe with attribution. The
-                // server records eventSource='telegram_contact_cta'.
-                const session = await trackTelegramGroupClick("telegram_contact_cta");
-                const targetHref = getTelegramGroupHref(session);
-                setTelegramContactHref(targetHref);
-                window.location.assign(targetHref);
+                // Private support contact — goes straight to the management
+                // Telegram account (NOT the funnel bot). Records
+                // eventSource='telegram_contact_cta' for analytics only.
+                await trackAndOpenPrivateContact();
               }}
             />
           </div>
@@ -371,6 +384,23 @@ export default function Home() {
           </p>
         </div>
       </div>
+
+      {/* Floating private-contact button — always reachable, fixed bottom-right
+          above the activity chip. Same direct contact as the "Me contacter"
+          CTA (https://t.me/prest_original). */}
+      <a
+        href={PRIVATE_CONTACT_URL}
+        target="_self"
+        aria-label="Me contacter en privé"
+        onClick={(event) => {
+          event.preventDefault();
+          void trackAndOpenPrivateContact();
+        }}
+        className="fixed bottom-5 right-4 z-30 flex items-center gap-2 rounded-full border border-white/15 bg-gradient-to-br from-[#fde047] via-[#facc15] to-[#a16207] px-4 py-3 text-[0.82rem] font-[700] uppercase tracking-[0.02em] text-[#0a1733] shadow-[0_12px_28px_rgba(202,138,4,0.5),inset_0_1px_0_rgba(255,255,255,0.45)] transition-all duration-200 hover:-translate-y-[2px] active:scale-[0.97] sm:bottom-6"
+      >
+        <TelegramIcon className="h-5 w-5 text-[#1e40af]" />
+        <span>Me contacter</span>
+      </a>
     </main>
   );
 }

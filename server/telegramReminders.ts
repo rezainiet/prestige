@@ -135,6 +135,24 @@ let workerStarted = false;
 let workerInterval: NodeJS.Timeout | null = null;
 let workerRunning = false;
 
+// The welcome + reminder copy is admin-editable and stored in site_settings,
+// so a stale support handle (e.g. an old "@PrestigePapel") gets physically
+// baked into the stored text and survives constant changes. Rewrite the
+// handle on the "Écris-moi en direct" line — whether it's an @handle or a
+// t.me/<handle> URL — to the canonical TELEGRAM_DIRECT_CONTACT. Scoped to
+// that line so other @mentions / links in the copy are never touched.
+export function normalizeDirectContact(text: string): string {
+  return text
+    .replace(
+      /(Écris-moi en direct\s*:?\s*)@[A-Za-z0-9_]{2,}/g,
+      `$1${TELEGRAM_DIRECT_CONTACT}`,
+    )
+    .replace(
+      /(Écris-moi en direct\s*:?\s*)https?:\/\/t\.me\/[A-Za-z0-9_]{2,}/gi,
+      `$1${TELEGRAM_DIRECT_CONTACT}`,
+    );
+}
+
 export function renderTelegramReminderMessage(template: string, context: ReminderTemplateContext = {}) {
   const firstName = (context.firstName || "").trim() || "toi";
   const groupUrl = context.groupUrl || DEFAULT_TELEGRAM_GROUP_URL;
@@ -146,14 +164,16 @@ export function renderTelegramReminderMessage(template: string, context: Reminde
   // — bypassing the per-user join-request flow we just wired up.
   const templateWithSwappedUrls = replaceTelegramGroupUrlInText(template, groupUrl);
 
-  const renderedMessage = templateWithSwappedUrls
-    .replaceAll("{first_name}", firstName)
-    .replaceAll("{firstName}", firstName)
-    .replaceAll("{group_url}", groupUrl)
-    .replaceAll("{groupLink}", groupUrl)
-    .replaceAll("{brand}", "Prestige")
-    .replaceAll(/\n{3,}/g, "\n\n")
-    .trim();
+  const renderedMessage = normalizeDirectContact(
+    templateWithSwappedUrls
+      .replaceAll("{first_name}", firstName)
+      .replaceAll("{firstName}", firstName)
+      .replaceAll("{group_url}", groupUrl)
+      .replaceAll("{groupLink}", groupUrl)
+      .replaceAll("{brand}", "Prestige")
+      .replaceAll(/\n{3,}/g, "\n\n")
+      .trim(),
+  );
 
   if (renderedMessage.includes(TELEGRAM_DIRECT_CONTACT)) {
     return renderedMessage;
@@ -170,13 +190,15 @@ export function renderTelegramWelcomeMessage(template: string, context: Reminder
   const groupUrl = context.groupUrl || DEFAULT_TELEGRAM_GROUP_URL;
   const firstName = (context.firstName || "").trim() || "toi";
 
-  return template
-    .replaceAll("{first_name}", firstName)
-    .replaceAll("{firstName}", firstName)
-    .replaceAll("{group_url}", groupUrl)
-    .replaceAll("{groupLink}", groupUrl)
-    .replaceAll("{brand}", "Prestige")
-    .trim();
+  return normalizeDirectContact(
+    template
+      .replaceAll("{first_name}", firstName)
+      .replaceAll("{firstName}", firstName)
+      .replaceAll("{group_url}", groupUrl)
+      .replaceAll("{groupLink}", groupUrl)
+      .replaceAll("{brand}", "Prestige")
+      .trim(),
+  );
 }
 
 export type ResolvedReminderStep = TelegramReminderStep & {
