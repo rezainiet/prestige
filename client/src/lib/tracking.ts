@@ -343,46 +343,16 @@ async function resolveSessionWithRetry(): Promise<TrackingSession | null> {
   return second;
 }
 
-function fireLeadPixel(eventId: string) {
-  if (typeof window === "undefined") return;
-  const fbq = (window as unknown as { fbq?: (...args: unknown[]) => void }).fbq;
-  if (typeof fbq !== "function") return;
-  try {
-    fbq("track", "Lead", { content_name: "Telegram Group CTA", content_category: "Telegram" }, { eventID: eventId });
-  } catch {
-    // Pixel must never block the user flow.
-  }
-}
-
 export async function trackTelegramGroupClick(source = "telegram_group_cta") {
   const fallbackFunnelToken = getOrCreateFunnelToken();
   // Ensure the _fbp cookie is created at click time even if it wasn't on first paint.
   ensureFbpCookie();
 
-  // Fire the Lead pixel + server CAPI BEFORE the heavy session resolve so we
-  // capture the high-intent click signal even if the user closes the tab
-  // mid-flight. Browser fbq is synchronous; the server post uses sendBeacon
-  // (queued by the browser to flush after navigation), with a fetch+keepalive
-  // fallback. We *await* it here so the request is actually on the wire
-  // before window.location.assign, but cap it at 250 ms so a stalled network
-  // can never block the redirect.
-  const leadEventId = randomId("lead");
-  if (!shouldDebounceClick(`${source}__lead`)) {
-    fireLeadPixel(leadEventId);
-    const leadPost = postTrackingRecord({
-      eventType: "lead",
-      eventSource: source,
-      visitorId: getVisitorId(),
-      eventId: leadEventId,
-      sessionToken: readStoredSession()?.sessionToken,
-      funnelToken: readStoredSession()?.funnelToken || fallbackFunnelToken,
-    });
-    await Promise.race([
-      leadPost,
-      new Promise<void>((resolve) => setTimeout(resolve, 250)),
-    ]);
-  }
-
+  // NOTE: The Telegram-group CTA click is no longer the conversion. The Lead
+  // now fires server-side when the user clicks the personal WhatsApp /wa-go
+  // link delivered in the bot DM (eventScope='whatsapp_click'). We deliberately
+  // no longer fire a browser/CAPI Lead here — only the telegram_click event
+  // below is recorded, purely for analytics.
   const session = await resolveSessionWithRetry();
   const debounce = shouldDebounceClick(source);
 

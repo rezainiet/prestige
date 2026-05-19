@@ -40,10 +40,6 @@ function buildCreateSessionResponse() {
   ];
 }
 
-function buildLeadAckResponse() {
-  return [{ result: { data: { json: { success: true } } } }];
-}
-
 describe("tracking session parser", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -96,18 +92,13 @@ describe("tracking session parser", () => {
   it("waits for createSession and markTelegramClick before resolving the Telegram group click helper", async () => {
     const sessionStorage = new MemoryStorage();
     const localStorage = new MemoryStorage();
-    // trackTelegramGroupClick now fires a Lead pixel + tracking.record BEFORE
-    // resolving the session (so Meta gets the high-intent signal even if the
-    // user closes the tab during session resolve). The fetch order is:
-    //   1) /api/trpc/tracking.record  ← Lead (postTrackingRecord)
-    //   2) /api/trpc/tracking.createSession
-    //   3) /api/trpc/tracking.markTelegramClick
+    // The Telegram-group CTA click is no longer the conversion: the Lead now
+    // fires server-side on the /wa-go redirect. trackTelegramGroupClick no
+    // longer posts a 'lead' tracking.record. The fetch order is now:
+    //   1) /api/trpc/tracking.createSession
+    //   2) /api/trpc/tracking.markTelegramClick
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => buildLeadAckResponse(),
-      })
       .mockResolvedValueOnce({
         json: async () => buildCreateSessionResponse(),
       })
@@ -143,16 +134,16 @@ describe("tracking session parser", () => {
     const session = await tracking.trackTelegramGroupClick("telegram_group_cta");
 
     expect(session?.sessionToken).toBe("session_123");
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/trpc/tracking.record?batch=1");
-    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/trpc/tracking.createSession?batch=1");
-    expect(fetchMock.mock.calls[2]?.[0]).toBe("/api/trpc/tracking.markTelegramClick?batch=1");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/trpc/tracking.createSession?batch=1");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/trpc/tracking.markTelegramClick?batch=1");
 
-    const leadPayload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
-    expect(leadPayload[0].json.eventType).toBe("lead");
-    expect(leadPayload[0].json.eventSource).toBe("telegram_group_cta");
+    // No 'lead' tracking.record is emitted any more.
+    expect(
+      fetchMock.mock.calls.some((call) => String(call?.[0]).includes("tracking.record")),
+    ).toBe(false);
 
-    const markClickPayload = JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body));
+    const markClickPayload = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
     expect(markClickPayload[0].json.sessionToken).toBe("session_123");
     expect(markClickPayload[0].json.source).toBe("telegram_group_cta");
   });

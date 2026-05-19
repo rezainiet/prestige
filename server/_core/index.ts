@@ -12,6 +12,7 @@ import { startMetaRetryWorker } from "../metaWorker";
 import { startTelegramAdminReportWorker } from "../telegramAdminReports";
 import { startTelegramBroadcastWorker } from "../telegramBroadcast";
 import { setupTelegramWebhook } from "../telegramWebhook";
+import { setupWaGoRoute } from "../waGoRoute";
 import { startTelegramReminderWorker } from "../telegramReminders";
 
 function assertProductionEnv() {
@@ -70,6 +71,7 @@ async function startServer() {
   // OAuth callback under /api/oauth/callback
   registerOAuthRoutes(app);
   setupTelegramWebhook(app);
+  setupWaGoRoute(app);
   if (process.env.WORKERS_ENABLED?.toLowerCase() !== "false") {
     startTelegramReminderWorker();
     startTelegramAdminReportWorker();

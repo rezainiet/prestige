@@ -54,7 +54,7 @@ import {
   updateTelegramJoinMetaStatusByEventId,
   upsertSetting,
 } from "./db";
-import { sendLead, sendPageView } from "./facebookCapi";
+import { sendPageView } from "./facebookCapi";
 import { buildServerFbc, retryStoredMetaRequest } from "./metaCapi";
 import { getUtmSessionByToken, getSetting } from "./db";
 import { syncTelegramGroupUrlContent, TELEGRAM_GROUP_URL_SETTING_KEY, validateTelegramGroupUrl } from "./telegramGroupLink";
@@ -273,6 +273,16 @@ export const appRouter = router({
         if (!limit.allowed) {
           throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Rate limit exceeded." });
         }
+        // The Telegram-group CTA click is no longer the conversion. The Lead
+        // now fires server-side on the WhatsApp /wa-go redirect (eventScope=
+        // 'whatsapp_click'). Drop the legacy 'lead' event entirely — no
+        // tracking_events row and no meta_event_logs Lead row — so stale
+        // browser clients that still POST it become a no-op. PageView,
+        // scroll_* and telegram_click are unaffected.
+        if (input.eventType === "lead") {
+          return { success: true } as const;
+        }
+
         const userAgent = getHeaderString(ctx.req.headers["user-agent"]);
         const referrer = getHeaderString(ctx.req.headers.referer);
         const forwardedFor = getHeaderString(ctx.req.headers["x-forwarded-for"]);
@@ -366,54 +376,6 @@ export const appRouter = router({
             attemptedAt: new Date(),
             completedAt: pageViewResult.success ? new Date() : null,
             nextRetryAt: pageViewResult.retryable ? new Date(Date.now() + 5 * 60 * 1000) : null,
-          });
-        }
-
-        if (input.eventType === "lead") {
-          // Lead = high-intent CTA click on the landing page (user is heading
-          // to Telegram). Fired before page unload so Meta has an optimization
-          // signal even if the user never reaches /start in the bot. Mirrors
-          // the browser fbq('track', 'Lead', ..., { eventID }) so the two
-          // events dedupe on Meta's side.
-          const leadEventId = input.eventId || `lead_${randomSessionToken()}`;
-          const capiPayloadWithId = { ...capiPayload, eventId: leadEventId };
-
-          await createMetaEventLog({
-            eventType: "Lead",
-            eventScope: "lead",
-            eventId: leadEventId,
-            funnelToken: input.funnelToken || null,
-            sessionToken: input.sessionToken || null,
-            requestPayloadJson: JSON.stringify(capiPayloadWithId),
-            status: "queued",
-            retryable: 0,
-            attemptCount: 0,
-          });
-
-          const leadResult = (await sendLead(capiPayloadWithId)) as any;
-          const leadStatus = leadResult.success
-            ? ("sent" as const)
-            : leadResult.retryable
-              ? ("retrying" as const)
-              : ("failed" as const);
-
-          await updateMetaEventLog(leadEventId, {
-            requestPayloadJson: leadResult.requestBody
-              ? JSON.stringify(leadResult.requestBody)
-              : JSON.stringify(capiPayloadWithId),
-            responsePayloadJson: leadResult.responseBody
-              ? JSON.stringify(leadResult.responseBody)
-              : null,
-            httpStatus: leadResult.httpStatus ?? null,
-            status: leadStatus,
-            errorCode: leadResult.errorCode ?? null,
-            errorSubcode: leadResult.errorSubcode ?? null,
-            errorMessage: leadResult.errorMessage ?? null,
-            retryable: leadResult.retryable ? 1 : 0,
-            attemptCount: 1,
-            attemptedAt: new Date(),
-            completedAt: leadResult.success ? new Date() : null,
-            nextRetryAt: leadResult.retryable ? new Date(Date.now() + 5 * 60 * 1000) : null,
           });
         }
 
@@ -591,7 +553,7 @@ export const appRouter = router({
           status: z.enum(["all", "queued", "sent", "failed", "retrying", "abandoned"]).optional(),
           eventType: z.enum(["all", "PageView", "Lead", "Subscribe"]).optional(),
           eventScope: z
-            .enum(["all", "pageview", "lead", "telegram_start", "telegram_join", "backfill"])
+            .enum(["all", "pageview", "whatsapp_click", "lead", "telegram_start", "telegram_join", "backfill"])
             .optional(),
           limit: z.number().int().min(1).max(200).optional(),
         }),

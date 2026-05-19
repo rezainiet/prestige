@@ -91,7 +91,13 @@ export async function processOneMetaRetryBatch(limit = 10) {
       nextRetryAt: status === "retrying" ? new Date(Date.now() + backoffMs(nextAttempt)) : null,
     });
 
-    if (candidate.telegramUserId) {
+    // Only Subscribe-scope events back the bot_starts.metaSubscribeStatus
+    // column. The whatsapp_click Lead also carries a telegramUserId (for
+    // debugging / dashboard), so without this scope guard a Lead retry would
+    // clobber the user's Subscribe status.
+    const isSubscribeScope =
+      candidate.eventScope === "telegram_start" || candidate.eventScope === "telegram_join";
+    if (candidate.telegramUserId && isSubscribeScope) {
       try {
         await updateBotStartMetaStatus(candidate.telegramUserId, status, result.eventId);
       } catch (error) {

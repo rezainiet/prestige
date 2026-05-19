@@ -21,7 +21,7 @@ import {
 
 const WORKER_NAME = "telegram_reminders";
 
-const TELEGRAM_DIRECT_CONTACT = "@Prestigeofficiel_bot";
+const TELEGRAM_DIRECT_CONTACT = "@prest_original";
 const TELEGRAM_DIRECT_CONTACT_LINE = `Une question ? Écris-moi en direct : ${TELEGRAM_DIRECT_CONTACT}`;
 const WORKER_INTERVAL_MS = 60_000;
 const PROCESS_BATCH_SIZE = 25;

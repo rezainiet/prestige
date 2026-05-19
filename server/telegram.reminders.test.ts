@@ -25,7 +25,7 @@ describe("telegram reminders", () => {
       groupUrl: "https://t.me/+demo",
     });
 
-    expect(message).toBe("Salut Karim → https://t.me/+demo\n\nUne question ? Écris-moi en direct : @MAXIME_SPECIALISTEM");
+    expect(message).toBe("Salut Karim → https://t.me/+demo\n\nUne question ? Écris-moi en direct : @prest_original");
   });
 
   it("construit un message de bienvenue vendeur avec lien du canal et contact direct", () => {

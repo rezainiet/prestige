@@ -45,8 +45,9 @@ import {
   scheduleTelegramReminderSequence,
   skipPendingTelegramReminderJobs,
 } from "./telegramReminders";
+import { buildWhatsAppRedirectUrl } from "./whatsappChannel";
 
-const TELEGRAM_DIRECT_CONTACT = "@Prestigeofficiel_bot";
+const TELEGRAM_DIRECT_CONTACT = "@prest_original";
 const META_RETRY_DELAY_MS = 5 * 60 * 1000;
 
 function getBotToken() {
@@ -781,22 +782,37 @@ export function setupTelegramWebhook(app: Express) {
         return;
       }
 
+      // The bot DM now delivers the personal WhatsApp /wa-go redirect — that
+      // click is the new bottom-of-funnel Lead. The Telegram personal-invite
+      // link (groupUrl) is still minted/cached above so the chat_join_request
+      // approval + bypass-protection flow is unchanged; it's just no longer
+      // surfaced in the welcome/reminder copy. We pass waGoUrl wherever the
+      // group URL used to render so {group_url} placeholders and any legacy
+      // Telegram invite URL in admin-edited copy are swapped for /wa-go.
+      const waGoUrl = buildWhatsAppRedirectUrl({
+        telegramUserId: userId,
+        sessionToken:
+          decoded?.sessionToken || linkage?.sessionToken || session?.sessionToken || null,
+        funnelToken:
+          decoded?.funnelToken || linkage?.funnelToken || session?.funnelToken || null,
+      });
+
       await scheduleTelegramReminderSequence({
         telegramUserId: userId,
         chatId: userId,
         firstName: telegramMessage.from.first_name || null,
         startedAt: new Date(telegramMessage.date * 1000),
-        groupUrlOverride: groupUrl,
+        groupUrlOverride: waGoUrl,
       });
 
       const welcomeBody = welcomeMsg
         ? renderTelegramWelcomeMessage(
-            replaceTelegramGroupUrlInText(welcomeMsg, groupUrl),
-            { firstName: telegramMessage.from.first_name || null, groupUrl },
+            replaceTelegramGroupUrlInText(welcomeMsg, waGoUrl),
+            { firstName: telegramMessage.from.first_name || null, groupUrl: waGoUrl },
           )
-        : buildDefaultWelcomeMessage(groupUrl);
+        : buildDefaultWelcomeMessage(waGoUrl);
       await sendTelegramMessage(telegramMessage.from.id, welcomeBody, {
-        replyMarkup: buildJoinGroupKeyboard(groupUrl),
+        replyMarkup: buildJoinGroupKeyboard(waGoUrl),
       });
     }
 
