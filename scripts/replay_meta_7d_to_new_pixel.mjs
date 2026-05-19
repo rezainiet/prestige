@@ -20,6 +20,13 @@
 import mysql from "mysql2/promise";
 
 const APPLY = process.argv.includes("--apply");
+// --test-code=XXXX  -> inject test_event_code so events land in Meta's
+//   "Test Events" tab instead of production data (validation run).
+// --limit=N         -> only send the first N replayable events (sampling).
+const testCodeArg = process.argv.find((a) => a.startsWith("--test-code="));
+const TEST_CODE = testCodeArg ? testCodeArg.split("=")[1] : null;
+const limitArg = process.argv.find((a) => a.startsWith("--limit="));
+const LIMIT = limitArg ? Math.max(1, Number(limitArg.split("=")[1])) : null;
 
 const DB_URL = process.env.DATABASE_URL;
 const PIXEL_ID = process.env.META_PIXEL_ID;
@@ -36,7 +43,11 @@ const MIN_EVENT_TIME = NOW - WINDOW_SECONDS;
 
 console.log(`Target pixel: ${PIXEL_ID}`);
 console.log(`Replay window: event_time >= ${MIN_EVENT_TIME} (${new Date(MIN_EVENT_TIME * 1000).toISOString()})`);
-console.log(`Mode: ${APPLY ? "APPLY" : "DRY-RUN"}`);
+console.log(
+  `Mode: ${APPLY ? "APPLY" : "DRY-RUN"}` +
+    (TEST_CODE ? ` (TEST_EVENT_CODE=${TEST_CODE} -> Test Events tab)` : " (LIVE)") +
+    (LIMIT ? ` limit=${LIMIT}` : ""),
+);
 
 const conn = await mysql.createConnection(DB_URL);
 
@@ -73,9 +84,15 @@ for (const r of rows) {
     skippedOld++;
     continue;
   }
-  // Never carry a test_event_code into a production replay.
+  // Never carry a stale test_event_code from the stored payload.
   if (payload.test_event_code) delete payload.test_event_code;
+  // Validation run: route this batch into Meta's Test Events tab.
+  if (TEST_CODE) payload.test_event_code = TEST_CODE;
   replayable.push({ ...r, payload, eventTime });
+}
+
+if (LIMIT && replayable.length > LIMIT) {
+  replayable.length = LIMIT;
 }
 
 console.log(
@@ -128,7 +145,10 @@ for (const r of replayable) {
   await new Promise((res) => setTimeout(res, 200));
 }
 
-console.log(`\nDone. replayed_to_new_pixel sent=${sent} failed=${failed}`);
+console.log(
+  `\nDone. ${TEST_CODE ? `TEST(${TEST_CODE})` : "LIVE"} -> pixel ${PIXEL_ID} ` +
+    `events_received_ok=${sent} failed=${failed}`,
+);
 if (failures.length) {
   console.log("Failures:");
   for (const f of failures.slice(0, 30)) console.log(`  ${f.eventId}: ${f.msg}`);
