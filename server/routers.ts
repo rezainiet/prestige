@@ -53,6 +53,7 @@ import {
   updateMetaEventLog,
   updateTelegramJoinMetaStatusByEventId,
   upsertSetting,
+  clearCachedPersonalInviteLinksForUnjoined,
 } from "./db";
 import { sendPageView } from "./facebookCapi";
 import { buildServerFbc, retryStoredMetaRequest } from "./metaCapi";
@@ -804,6 +805,15 @@ export const appRouter = router({
             return { success: false, error: validation.error } as const;
           }
           await upsertSetting(TELEGRAM_CHANNEL_ID_SETTING_KEY, validation.value);
+          // Stale cached per-user invite links point at the OLD channel and
+          // would be reused for up to 30 days (welcome re-/start, reminder
+          // button + text). Clear them for not-yet-joined users so everything
+          // re-mints from the new channel on next touch.
+          const cleared = await clearCachedPersonalInviteLinksForUnjoined();
+          log.info("dashboard.updateSetting", "telegram_channel_id_updated", {
+            channelId: validation.value,
+            clearedCachedInviteLinks: cleared,
+          });
           return { success: true } as const;
         }
 

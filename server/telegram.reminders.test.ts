@@ -5,6 +5,7 @@ import {
   renderTelegramReminderMessage,
 } from "./telegramReminders";
 import { buildDefaultWelcomeMessage } from "./telegramWebhook";
+import { replaceTelegramGroupUrlInText } from "./telegramGroupLink";
 
 describe("telegram reminders", () => {
   it("définit les sept relances demandées avec des clés distinctes", () => {
@@ -59,5 +60,21 @@ describe("telegram reminders", () => {
     expect(drafts[0]?.messageText).toContain("Yassine");
     expect(drafts[0]?.messageText).toContain("https://t.me/");
     expect(drafts[0]?.messageText).toContain("@prest_original");
+  });
+
+  it("re-template d'une relance: un lien d'invite figé (ancien canal) est remplacé par le lien per-user frais, le contact direct survit", () => {
+    // The reminder worker now re-applies replaceTelegramGroupUrlInText at send
+    // time with the freshly-resolved per-user link, so a channel switch heals
+    // the baked-in text. A baked OLD-channel invite must be swapped for the
+    // fresh link while the @prest_original handle (not an invite link) stays.
+    const bakedText =
+      "Rejoins le groupe privé maintenant ici → https://t.me/+aoa4AB_A_rwyODhk\n\nUne question ? Écris-moi en direct : @prest_original";
+    const freshPerUserLink = "https://t.me/+NEWchannelPerUserLink";
+
+    const healed = replaceTelegramGroupUrlInText(bakedText, freshPerUserLink);
+
+    expect(healed).toContain(freshPerUserLink);
+    expect(healed).not.toContain("https://t.me/+aoa4AB_A_rwyODhk");
+    expect(healed).toContain("@prest_original");
   });
 });

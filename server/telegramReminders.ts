@@ -481,13 +481,17 @@ export async function processDueTelegramReminderJobs() {
     }
 
     // Per-user resolution: cached link, else regenerate. The static admin URL
-    // is intentionally never used here. messageText was already baked with
-    // the correct personal URL at job-creation time; the inline button is
-    // the second surface where a stale/static link could leak.
+    // is intentionally never used here. We re-template messageText with the
+    // freshly-resolved per-user link at SEND time (not just the inline button)
+    // so a channel switch heals the baked-in text too — the job text was baked
+    // at creation time and would otherwise ship a stale old-channel link.
     const inviteUrl = await resolveReminderInviteUrl(job.telegramUserId);
+    const messageText = inviteUrl
+      ? replaceTelegramGroupUrlInText(job.messageText, inviteUrl)
+      : job.messageText;
     const sendOptions = inviteUrl ? { replyMarkup: buildJoinGroupKeyboard(inviteUrl) } : {};
 
-    const result = await sendTelegramMessage(job.chatId, job.messageText, sendOptions);
+    const result = await sendTelegramMessage(job.chatId, messageText, sendOptions);
 
     if (result.ok) {
       await markJobSent(job.id);

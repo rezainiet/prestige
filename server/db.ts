@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   botStarts,
@@ -1071,6 +1071,25 @@ export async function setBotStartPersonalInviteLink(
       personalInviteLinkExpiresAt: expiresAt,
     })
     .where(eq(botStarts.telegramUserId, telegramUserId));
+}
+
+// Clear cached per-user invite links for users who haven't joined the channel
+// yet, so their next /start or reminder re-mints a fresh link from the CURRENT
+// channel. Called when the funnel channel is switched: a stale cached link
+// points at the OLD channel and would otherwise be reused for up to 30 days
+// (welcome on re-/start, reminder button, reminder text). Joined users are left
+// untouched — they're done and never get re-served a link. Returns rows cleared.
+export async function clearCachedPersonalInviteLinksForUnjoined(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const result = await db
+    .update(botStarts)
+    .set({ personalInviteLink: null, personalInviteLinkExpiresAt: null })
+    .where(and(isNull(botStarts.joinedAt), isNotNull(botStarts.personalInviteLink)));
+  const header = Array.isArray(result) ? result[0] : result;
+  return header && typeof (header as { affectedRows?: number }).affectedRows === "number"
+    ? (header as { affectedRows: number }).affectedRows
+    : 0;
 }
 
 // Returns the cached personal invite link for a user IF it hasn't expired
