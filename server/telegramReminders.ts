@@ -18,6 +18,7 @@ import {
   getTelegramGroupUrl,
   replaceTelegramGroupUrlInText,
 } from "./telegramGroupLink";
+import { getTelegramChannelId } from "./telegramChannel";
 
 const WORKER_NAME = "telegram_reminders";
 
@@ -437,7 +438,7 @@ async function resolveReminderInviteUrl(telegramUserId: string): Promise<string 
   const cached = await getValidPersonalInviteLink(telegramUserId);
   if (cached) return cached;
 
-  const channelId = process.env.TELEGRAM_CHANNEL_ID || "";
+  const channelId = await getTelegramChannelId();
   if (!channelId) return null;
 
   const minted = await createPersonalInviteLink({ chatId: channelId, telegramUserId });

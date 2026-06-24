@@ -26,6 +26,7 @@ vi.mock("./db", () => ({
 
 vi.mock("./metaCapi", () => ({
   fireSubscribeEvent: vi.fn(),
+  fireTelegramJoinLeadEvent: vi.fn(),
 }));
 
 vi.mock("./telegramBot", async () => {
@@ -64,7 +65,7 @@ import {
   updateBotStartMetaStatus,
   updateMetaEventStatus,
 } from "./db";
-import { fireSubscribeEvent } from "./metaCapi";
+import { fireSubscribeEvent, fireTelegramJoinLeadEvent } from "./metaCapi";
 
 function buildApp() {
   process.env.TELEGRAM_WEBHOOK_SECRET = "test-secret-1234567890abcdef";
@@ -191,6 +192,12 @@ describe("Telegram webhook hardening", () => {
       httpStatus: 200,
       retryable: false,
     } as any);
+    vi.mocked(fireTelegramJoinLeadEvent).mockResolvedValue({
+      success: true,
+      eventId: "tg_join_lead_7777_n1003932081102",
+      httpStatus: 200,
+      retryable: false,
+    } as any);
 
     const joinUpdate = {
       update_id: 999_010,
@@ -217,6 +224,13 @@ describe("Telegram webhook hardening", () => {
     // The meta_event_log row carries the join scope, not the legacy skip row.
     expect(vi.mocked(createMetaEventLog)).toHaveBeenCalledWith(
       expect.objectContaining({ eventScope: "telegram_join", eventType: "Subscribe" }),
+    );
+    // Bottom-of-funnel Lead MUST also fire on the channel join — this is the
+    // conversion that replaced the WhatsApp /wa-go click. Distinct scope so the
+    // retry worker never mistakes it for a Subscribe-status update.
+    expect(vi.mocked(fireTelegramJoinLeadEvent)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(createMetaEventLog)).toHaveBeenCalledWith(
+      expect.objectContaining({ eventScope: "telegram_join_lead", eventType: "Lead" }),
     );
   });
 

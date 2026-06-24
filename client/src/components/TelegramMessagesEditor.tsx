@@ -28,6 +28,8 @@ type WelcomeEntry = {
 
 type TelegramSettingsData = {
   groupUrl: string;
+  channelId: string;
+  channelIdSettingKey: string;
   welcome: WelcomeEntry;
   reminders: ReminderEntry[];
   delayBounds: { min: number; max: number };
@@ -88,6 +90,13 @@ export function TelegramMessagesEditor({ token }: Props) {
         </div>
       ) : (
         <>
+          <ChannelCard
+            token={token}
+            channelId={data.channelId}
+            settingKey={data.channelIdSettingKey}
+            mutation={updateMutation}
+            onSaved={() => void settingsQuery.refetch()}
+          />
           <WelcomeCard
             token={token}
             entry={data.welcome}
@@ -114,6 +123,90 @@ export function TelegramMessagesEditor({ token }: Props) {
 }
 
 type MutationLike = ReturnType<typeof trpc.dashboard.updateSetting.useMutation>;
+
+function ChannelCard({
+  token,
+  channelId,
+  settingKey,
+  mutation,
+  onSaved,
+}: {
+  token: string;
+  channelId: string;
+  settingKey: string;
+  mutation: MutationLike;
+  onSaved: () => void;
+}) {
+  const [draft, setDraft] = useState(channelId);
+  const [savingThis, setSavingThis] = useState(false);
+
+  useEffect(() => {
+    setDraft(channelId);
+  }, [channelId]);
+
+  const isDirty = draft.trim() !== channelId.trim();
+  const isPending = savingThis && mutation.isPending;
+
+  const handleSave = async () => {
+    if (!isDirty) return;
+    setSavingThis(true);
+    try {
+      const result = await mutation.mutateAsync({ token, key: settingKey, value: draft.trim() });
+      if (!result.success) {
+        toast.error("Save failed", { description: result.error || "Could not save channel id." });
+        return;
+      }
+      toast.success("Telegram channel updated", {
+        description: "New /start invites are now minted from this channel. The bot must be an admin of it.",
+      });
+      onSaved();
+    } catch (error) {
+      toast.error("Save failed", {
+        description: error instanceof Error ? error.message : "Network error.",
+      });
+    } finally {
+      setSavingThis(false);
+    }
+  };
+
+  return (
+    <section className="rounded-[18px] border border-amber-500/30 bg-slate-950/70 px-5 py-4">
+      <div className="flex items-center gap-2 text-amber-300">
+        <span className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-amber-400/15 text-xs font-bold uppercase">
+          #
+        </span>
+        <h4 className="text-sm font-semibold text-white">Telegram channel (join target)</h4>
+      </div>
+      <p className="mt-1 text-xs text-slate-400">
+        The numeric channel id the bot mints per-user invite links from and approves joins into.
+        This is the real switch for which channel the funnel routes users to. The bot
+        (@Prestigeofficiel_bot) must be an admin of the channel with invite permission. Find the id by
+        forwarding a channel message to <code className="rounded bg-slate-900 px-1 py-0.5 text-slate-300">@getidsbot</code>.
+      </p>
+
+      <input
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        placeholder="-100xxxxxxxxxx"
+        className="mt-3 h-12 w-full rounded-2xl border border-slate-800 bg-slate-950 px-4 font-mono text-sm text-slate-100 outline-none transition focus:border-amber-400"
+        spellCheck={false}
+        autoComplete="off"
+      />
+
+      <div className="mt-3 flex justify-end">
+        <button
+          type="button"
+          onClick={() => void handleSave()}
+          disabled={!isDirty || isPending}
+          className="inline-flex h-9 items-center gap-2 rounded-xl bg-amber-400 px-4 text-xs font-semibold text-slate-950 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+          {isDirty ? "Save channel" : "Saved"}
+        </button>
+      </div>
+    </section>
+  );
+}
 
 function WelcomeCard({
   token,

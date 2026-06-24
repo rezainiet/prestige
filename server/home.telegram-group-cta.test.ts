@@ -6,12 +6,12 @@ import Home from "../client/src/pages/Home";
 
 const homeSource = readFileSync(new URL("../client/src/pages/Home.tsx", import.meta.url), "utf8");
 
-describe("Landing MAXIME Telegram CTA", () => {
+describe("Landing Prestige Telegram CTA", () => {
   it("renders the Telegram group CTA as a desktop-safe HTTPS Telegram bot link from the first render", () => {
     const html = renderToStaticMarkup(createElement(Home));
 
     expect(html).toContain("Groupe Telegram");
-    expect(html).toContain('href="https://t.me/Maxime1_bot"');
+    expect(html).toContain('href="https://t.me/Prestigeofficiel_bot"');
     expect(html).not.toContain("Chargement Telegram...");
     expect(html).toContain('data-direct-open="telegram-bot"');
     expect(html).toContain('target="_self"');
@@ -23,7 +23,8 @@ describe("Landing MAXIME Telegram CTA", () => {
     expect(homeSource).toContain("function shouldPreferTelegramDeepLink()");
     expect(homeSource).toContain("function getTelegramGroupHref(session?: TrackingSession | null)");
     expect(homeSource).toContain('useState<string>(getTelegramGroupHref())');
-    expect(homeSource).toContain('setTelegramGroupHref(getTelegramGroupHref(session))');
+    expect(homeSource).toContain('const href = getTelegramGroupHref(session)');
+    expect(homeSource).toContain('setTelegramGroupHref(href)');
     // After the P0-A fix, the deep-link/bot-URL fall back through a
     // funnelToken-only payload before ever returning the bare URL — so we
     // assert that both the session-aware branch AND the funnelToken fallback
@@ -45,6 +46,6 @@ describe("Landing MAXIME Telegram CTA", () => {
     const html = renderToStaticMarkup(createElement(Home));
 
     expect(html).toContain("Me contacter");
-    expect(html).toContain("https://t.me/MAXIME_SPECIALISTEM");
+    expect(html).toContain("https://t.me/prest_original");
   });
 });

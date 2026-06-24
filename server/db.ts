@@ -2040,7 +2040,7 @@ export async function getFunnelSnapshot(window: FunnelWindow = "today"): Promise
   const [rows]: any = await db.execute(sql`
     SELECT
       (SELECT COUNT(*) FROM tracking_events WHERE eventType = 'pageview' AND createdAt ${w}) AS pageviews,
-      (SELECT COUNT(*) FROM meta_event_logs WHERE eventScope = 'whatsapp_click' AND status = 'sent' AND COALESCE(completedAt, createdAt) ${w}) AS leads,
+      (SELECT COUNT(*) FROM meta_event_logs WHERE eventScope IN ('whatsapp_click','telegram_join_lead') AND status = 'sent' AND COALESCE(completedAt, createdAt) ${w}) AS leads,
       (SELECT COUNT(*) FROM bot_starts WHERE startedAt ${w}) AS botStarts,
       (SELECT COUNT(*) FROM telegram_join_request_audit WHERE decision = 'approved' AND decidedAt ${w}) AS approvedJoins,
       (SELECT COUNT(*) FROM meta_event_logs WHERE eventScope IN ('telegram_start','telegram_join') AND status = 'sent' AND COALESCE(completedAt, createdAt) ${w}) AS subscribesSent

@@ -16,7 +16,9 @@ function buildCaller() {
   });
 }
 
-describe("telegram tracking router", () => {
+// Integration test — exercises the tRPC router against a live MySQL instance
+// via getUtmSessionByToken. Skip locally without DATABASE_URL.
+describe.skipIf(!process.env.DATABASE_URL)("telegram tracking router", () => {
   it("crée une session Telegram, génère les liens bot et marque le clic", async () => {
     const caller = buildCaller();
 
@@ -34,8 +36,8 @@ describe("telegram tracking router", () => {
 
     expect(created.success).toBe(true);
     expect(created.sessionToken.length).toBeGreaterThan(20);
-    expect(created.telegramBotUrl).toContain("https://t.me/Misternb_bot?start=");
-    expect(created.telegramDeepLink).toContain("tg://resolve?domain=Misternb_bot&start=");
+    expect(created.telegramBotUrl).toContain("https://t.me/Prestigeofficiel_bot?start=");
+    expect(created.telegramDeepLink).toContain("tg://resolve?domain=Prestigeofficiel_bot&start=");
     expect(created.payload.length).toBeGreaterThan(10);
 
     const storedBeforeClick = await getUtmSessionByToken(created.sessionToken);

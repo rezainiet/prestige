@@ -59,6 +59,11 @@ import { buildServerFbc, retryStoredMetaRequest } from "./metaCapi";
 import { getUtmSessionByToken, getSetting } from "./db";
 import { syncTelegramGroupUrlContent, TELEGRAM_GROUP_URL_SETTING_KEY, validateTelegramGroupUrl } from "./telegramGroupLink";
 import {
+  getTelegramChannelId,
+  TELEGRAM_CHANNEL_ID_SETTING_KEY,
+  validateTelegramChannelId,
+} from "./telegramChannel";
+import {
   TELEGRAM_REMINDER_DELAY_BOUNDS,
   TELEGRAM_REMINDER_STEPS,
   isValidReminderDelayMinutes,
@@ -126,6 +131,7 @@ const TELEGRAM_DELAY_SETTING_KEYS = new Set<string>(REMINDER_DELAY_SETTING_KEYS)
 
 const TELEGRAM_SETTING_ALLOWLIST = new Set<string>([
   TELEGRAM_GROUP_URL_SETTING_KEY,
+  TELEGRAM_CHANNEL_ID_SETTING_KEY,
   WELCOME_MESSAGE_SETTING_KEY,
   ...REMINDER_MESSAGE_SETTING_KEYS,
   ...REMINDER_DELAY_SETTING_KEYS,
@@ -789,6 +795,18 @@ export const appRouter = router({
           return { success: true } as const;
         }
 
+        if (input.key === TELEGRAM_CHANNEL_ID_SETTING_KEY) {
+          const validation = validateTelegramChannelId(input.value);
+          if (!validation.ok) {
+            log.warn("dashboard.updateSetting", "telegram_channel_id_rejected", {
+              error: validation.error,
+            });
+            return { success: false, error: validation.error } as const;
+          }
+          await upsertSetting(TELEGRAM_CHANNEL_ID_SETTING_KEY, validation.value);
+          return { success: true } as const;
+        }
+
         if (TELEGRAM_MESSAGE_SETTING_KEYS.has(input.key)) {
           const trimmed = input.value.trim();
           if (!trimmed) {
@@ -824,7 +842,10 @@ export const appRouter = router({
         return { error: "Unauthorized" } as const;
       }
 
-      const groupUrl = await getTelegramGroupUrl();
+      const [groupUrl, channelId] = await Promise.all([
+        getTelegramGroupUrl(),
+        getTelegramChannelId(),
+      ]);
       const [welcomeStored, ...reminderEntries] = await Promise.all([
         getSetting(WELCOME_MESSAGE_SETTING_KEY),
         ...TELEGRAM_REMINDER_STEPS.map(async (step) => {
@@ -854,6 +875,8 @@ export const appRouter = router({
 
       return {
         groupUrl,
+        channelId,
+        channelIdSettingKey: TELEGRAM_CHANNEL_ID_SETTING_KEY,
         welcome: {
           settingKey: WELCOME_MESSAGE_SETTING_KEY,
           message: welcomeStored || buildDefaultWelcomeMessage(groupUrl),

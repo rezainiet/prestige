@@ -325,3 +325,65 @@ export async function fireWhatsAppLeadEvent(data: CapiEventData): Promise<MetaSe
   const payload = buildWhatsAppLeadPayload(data);
   return postMetaPayload(data.eventId, payload);
 }
+
+/**
+ * Telegram-channel-join Lead. The bottom-of-funnel conversion now that the bot
+ * DM delivers the private Telegram invite again (replacing the /wa-go WhatsApp
+ * redirect): the user Subscribed on /start and has now actually been approved
+ * into the private channel. Mirrors buildSubscribePayload so external_id
+ * (hashed landing visitorId) stitches the full funnel back to the ad visit.
+ */
+export function buildTelegramJoinLeadPayload(data: CapiEventData) {
+  const externalIdSource = data.visitorId || String(data.telegramUserId);
+  const userData: Record<string, string> = {
+    external_id: hashValue(externalIdSource),
+  };
+
+  if (data.ipAddress) userData.client_ip_address = data.ipAddress;
+  if (data.userAgent) userData.client_user_agent = data.userAgent;
+  if (data.fbp) userData.fbp = data.fbp;
+
+  if (data.telegramFirstName) userData.fn = hashValue(data.telegramFirstName);
+  if (data.telegramLastName) userData.ln = hashValue(data.telegramLastName);
+
+  const fbc = buildServerFbc(data.fbclid, data.sessionCreatedAt);
+  if (fbc) userData.fbc = fbc;
+
+  const customData: Record<string, string> = {
+    content_name: "Telegram Channel Join",
+    content_category: "Telegram",
+    click_source: "telegram_channel_join",
+    currency: "EUR",
+    value: "0.00",
+  };
+
+  if (data.utmCampaign) customData.utm_campaign = data.utmCampaign;
+  if (data.utmSource) customData.utm_source = data.utmSource;
+  if (data.utmMedium) customData.utm_medium = data.utmMedium;
+  if (data.utmContent) customData.utm_content = data.utmContent;
+
+  const payload: Record<string, unknown> = {
+    data: [
+      {
+        event_name: "Lead",
+        event_time: data.eventTime,
+        event_id: data.eventId,
+        event_source_url: data.sourceUrl || DEFAULT_SOURCE_URL,
+        action_source: "website",
+        user_data: userData,
+        custom_data: customData,
+      },
+    ],
+  };
+
+  if (data.testEventCode) {
+    payload.test_event_code = data.testEventCode;
+  }
+
+  return payload;
+}
+
+export async function fireTelegramJoinLeadEvent(data: CapiEventData): Promise<MetaSendResult> {
+  const payload = buildTelegramJoinLeadPayload(data);
+  return postMetaPayload(data.eventId, payload);
+}

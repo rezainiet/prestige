@@ -31,9 +31,9 @@ describe("telegram reminders", () => {
   it("construit un message de bienvenue vendeur avec lien du canal et contact direct", () => {
     const message = buildDefaultWelcomeMessage("https://t.me/+demo");
 
-    expect(message).toContain("Bienvenue dans la team MAXIME");
+    expect(message).toContain("Bienvenue dans la team Prestige");
     expect(message).toContain("https://t.me/+demo");
-    expect(message).toContain("@MAXIME_SPECIALISTEM");
+    expect(message).toContain("@prest_original");
   });
 
   it("génère une file de sept jobs avec les bons délais et des messages différenciés", async () => {
@@ -55,9 +55,9 @@ describe("telegram reminders", () => {
       TELEGRAM_REMINDER_STEPS.map((step) => step.defaultDelayMin * 60 * 1000),
     );
 
-    expect(drafts[0]?.messageText).toContain("groupe privé MAXIME");
+    expect(drafts[0]?.messageText).toContain("groupe privé Prestige");
     expect(drafts[0]?.messageText).toContain("Yassine");
     expect(drafts[0]?.messageText).toContain("https://t.me/");
-    expect(drafts[0]?.messageText).toContain("@MAXIME_SPECIALISTEM");
+    expect(drafts[0]?.messageText).toContain("@prest_original");
   });
 });

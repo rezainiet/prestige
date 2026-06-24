@@ -23,7 +23,7 @@ import {
   upsertBotStart,
   upsertTelegramLinkage,
 } from "./db";
-import { fireSubscribeEvent } from "./metaCapi";
+import { fireSubscribeEvent, fireTelegramJoinLeadEvent } from "./metaCapi";
 import {
   buildTelegramAdminReportText,
   isTelegramAdminAuthorized,
@@ -40,12 +40,12 @@ import {
   getTelegramGroupUrl,
   replaceTelegramGroupUrlInText,
 } from "./telegramGroupLink";
+import { getTelegramChannelId } from "./telegramChannel";
 import {
   renderTelegramWelcomeMessage,
   scheduleTelegramReminderSequence,
   skipPendingTelegramReminderJobs,
 } from "./telegramReminders";
-import { buildWhatsAppRedirectUrl } from "./whatsappChannel";
 
 const TELEGRAM_DIRECT_CONTACT = "@prest_original";
 const META_RETRY_DELAY_MS = 5 * 60 * 1000;
@@ -449,6 +449,104 @@ async function fireSubscribeForJoin(args: {
   }
 }
 
+async function fireLeadForJoin(args: {
+  telegramUserId: string;
+  telegramUsername?: string | null;
+  telegramFirstName?: string | null;
+  telegramLastName?: string | null;
+  channelId: string;
+  eventTime: number;
+  session?: Awaited<ReturnType<typeof resolveLandingSession>>;
+  sessionToken: string | null;
+  funnelToken: string | null;
+}): Promise<void> {
+  // Bottom-of-funnel conversion: the user has actually been approved into the
+  // private Telegram channel. Subscribe already fired on /start (or on this
+  // same join for bypass users); this Lead marks the real channel entry.
+  //
+  // Distinct scope `telegram_join_lead` (NOT `telegram_join`) so the retry
+  // worker does not treat it as a Subscribe-scope event and clobber the user's
+  // bot_starts.metaSubscribeStatus. The stable per-user-per-channel eventId
+  // dedupes duplicate join webhooks at Meta and via the unique eventId column.
+  const eventId = `tg_join_lead_${args.telegramUserId}_${args.channelId.replace(/-/g, "n")}`;
+
+  await createMetaEventLog({
+    eventType: "Lead",
+    eventScope: "telegram_join_lead",
+    eventId,
+    funnelToken: args.funnelToken,
+    sessionToken: args.sessionToken,
+    telegramUserId: args.telegramUserId,
+    status: "queued",
+    retryable: 0,
+    attemptCount: 0,
+  });
+
+  try {
+    const metaResult = await fireTelegramJoinLeadEvent({
+      eventId,
+      eventTime: Math.floor(args.eventTime),
+      telegramUserId: args.telegramUserId,
+      telegramUsername: args.telegramUsername || undefined,
+      telegramFirstName: args.telegramFirstName || undefined,
+      telegramLastName: args.telegramLastName || undefined,
+      visitorId: args.session?.visitorId || undefined,
+      fbclid: args.session?.fbclid || undefined,
+      fbp: args.session?.fbp || undefined,
+      sessionCreatedAt: args.session?.createdAt,
+      utmSource: args.session?.utmSource || undefined,
+      utmMedium: args.session?.utmMedium || undefined,
+      utmCampaign: args.session?.utmCampaign || undefined,
+      utmContent: args.session?.utmContent || undefined,
+      sourceUrl: args.session?.landingPage || undefined,
+      // Landing IP/UA only — Telegram webhook IP/UA would tank EMQ, exactly
+      // like fireSubscribeForStart / fireSubscribeForJoin.
+      userAgent: args.session?.userAgent || undefined,
+      ipAddress: args.session?.ipAddress || undefined,
+    });
+
+    const status = metaResult.success ? "sent" : metaResult.retryable ? "retrying" : "failed";
+
+    await updateMetaEventLog(eventId, {
+      requestPayloadJson: metaResult.requestBody ? JSON.stringify(metaResult.requestBody) : null,
+      responsePayloadJson: metaResult.responseBody ? JSON.stringify(metaResult.responseBody) : null,
+      httpStatus: metaResult.httpStatus ?? null,
+      status,
+      errorCode: metaResult.errorCode ?? null,
+      errorSubcode: metaResult.errorSubcode ?? null,
+      errorMessage: metaResult.errorMessage ?? null,
+      retryable: metaResult.retryable ? 1 : 0,
+      attemptCount: 1,
+      attemptedAt: new Date(),
+      completedAt: metaResult.success ? new Date() : null,
+      nextRetryAt: metaResult.retryable ? new Date(Date.now() + META_RETRY_DELAY_MS) : null,
+    });
+
+    log.info("telegramWebhook", "lead_fired_on_join", {
+      telegramUserId: args.telegramUserId,
+      channelId: args.channelId,
+      eventId,
+      status,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.error("telegramWebhook", "meta_join_lead_unexpected_error", {
+      telegramUserId: args.telegramUserId,
+      eventId,
+      error: message,
+    });
+    await updateMetaEventLog(eventId, {
+      status: "retrying",
+      errorCode: "unexpected_error",
+      errorMessage: message,
+      retryable: 1,
+      attemptCount: 1,
+      attemptedAt: new Date(),
+      nextRetryAt: new Date(Date.now() + META_RETRY_DELAY_MS),
+    });
+  }
+}
+
 async function handleNewMember(
   user: TelegramUser,
   chat: TelegramChat,
@@ -513,6 +611,29 @@ async function handleNewMember(
           ? "retrying"
           : "failed";
     }
+  }
+
+  // Bottom-of-funnel Lead: the user has actually entered the private channel.
+  // Runs once per join (the duplicate-join guard above already returned for
+  // repeat webhooks). Wrapped so a CAPI hiccup never blocks the join record.
+  try {
+    await fireLeadForJoin({
+      telegramUserId,
+      telegramUsername: user.username || null,
+      telegramFirstName: user.first_name || null,
+      telegramLastName: user.last_name || null,
+      channelId,
+      eventTime: date,
+      session,
+      sessionToken: resolvedSessionToken || session?.sessionToken || null,
+      funnelToken: resolvedFunnelToken || session?.funnelToken || null,
+    });
+  } catch (err) {
+    log.error("telegramWebhook", "fire_lead_for_join_failed", {
+      telegramUserId,
+      channelId,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 
   await insertTelegramJoin({
@@ -718,8 +839,8 @@ export function setupTelegramWebhook(app: Express) {
       // text-only "try /start again" message and let the next /start (or the
       // reminder worker) heal — much rarer failure mode than the leak it
       // replaces.
-      const channelId = process.env.TELEGRAM_CHANNEL_ID || "";
-      const [welcomeMsg, freshBotStart] = await Promise.all([
+      const [channelId, welcomeMsg, freshBotStart] = await Promise.all([
+        getTelegramChannelId(),
         getSetting("welcome_message"),
         getBotStartByTelegramUserId(userId),
       ]);
@@ -782,37 +903,28 @@ export function setupTelegramWebhook(app: Express) {
         return;
       }
 
-      // The bot DM now delivers the personal WhatsApp /wa-go redirect — that
-      // click is the new bottom-of-funnel Lead. The Telegram personal-invite
-      // link (groupUrl) is still minted/cached above so the chat_join_request
-      // approval + bypass-protection flow is unchanged; it's just no longer
-      // surfaced in the welcome/reminder copy. We pass waGoUrl wherever the
-      // group URL used to render so {group_url} placeholders and any legacy
-      // Telegram invite URL in admin-edited copy are swapped for /wa-go.
-      const waGoUrl = buildWhatsAppRedirectUrl({
-        telegramUserId: userId,
-        sessionToken:
-          decoded?.sessionToken || linkage?.sessionToken || session?.sessionToken || null,
-        funnelToken:
-          decoded?.funnelToken || linkage?.funnelToken || session?.funnelToken || null,
-      });
-
+      // The bot DM delivers the personal Telegram channel invite (groupUrl,
+      // minted/cached above with creates_join_request=true). That join is the
+      // bottom-of-funnel Lead, fired server-side from handleNewMember once the
+      // user is approved into the channel. We pass groupUrl wherever the group
+      // URL renders so {group_url} placeholders and any legacy Telegram invite
+      // URL in admin-edited copy resolve to this per-user gated link.
       await scheduleTelegramReminderSequence({
         telegramUserId: userId,
         chatId: userId,
         firstName: telegramMessage.from.first_name || null,
         startedAt: new Date(telegramMessage.date * 1000),
-        groupUrlOverride: waGoUrl,
+        groupUrlOverride: groupUrl,
       });
 
       const welcomeBody = welcomeMsg
         ? renderTelegramWelcomeMessage(
-            replaceTelegramGroupUrlInText(welcomeMsg, waGoUrl),
-            { firstName: telegramMessage.from.first_name || null, groupUrl: waGoUrl },
+            replaceTelegramGroupUrlInText(welcomeMsg, groupUrl),
+            { firstName: telegramMessage.from.first_name || null, groupUrl },
           )
-        : buildDefaultWelcomeMessage(waGoUrl);
+        : buildDefaultWelcomeMessage(groupUrl);
       await sendTelegramMessage(telegramMessage.from.id, welcomeBody, {
-        replyMarkup: buildJoinGroupKeyboard(waGoUrl),
+        replyMarkup: buildJoinGroupKeyboard(groupUrl),
       });
     }
 

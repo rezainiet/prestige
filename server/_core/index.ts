@@ -32,6 +32,11 @@ function assertProductionEnv() {
     DASHBOARD_PASSWORD: process.env.DASHBOARD_PASSWORD,
     TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
     TELEGRAM_WEBHOOK_SECRET: process.env.TELEGRAM_WEBHOOK_SECRET,
+    TELEGRAM_CHANNEL_ID: process.env.TELEGRAM_CHANNEL_ID,
+    META_PIXEL_ID: process.env.META_PIXEL_ID,
+    META_CONVERSIONS_TOKEN: process.env.META_CONVERSIONS_TOKEN,
+    APP_BASE_URL: process.env.APP_BASE_URL,
+    OAUTH_SERVER_URL: process.env.OAUTH_SERVER_URL,
   };
   const missing = Object.entries(required)
     .filter(([, value]) => !value)

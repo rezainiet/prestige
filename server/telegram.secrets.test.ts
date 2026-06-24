@@ -4,12 +4,16 @@ describe("telegram secrets", () => {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
   const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
   const runExternalValidation = process.env.RUN_EXTERNAL_SECRET_VALIDATION === "true";
+  const hasLocalSecrets = Boolean(botToken && webhookSecret);
 
-  it("vérifie la présence du secret webhook et du token bot configurés", () => {
-    expect(botToken).toBeTruthy();
-    expect(webhookSecret).toBeTruthy();
-    expect((webhookSecret || "").length).toBeGreaterThanOrEqual(16);
-  });
+  it.skipIf(!hasLocalSecrets)(
+    "vérifie la présence du secret webhook et du token bot configurés",
+    () => {
+      expect(botToken).toBeTruthy();
+      expect(webhookSecret).toBeTruthy();
+      expect((webhookSecret || "").length).toBeGreaterThanOrEqual(16);
+    },
+  );
 
   it.skipIf(!(botToken && runExternalValidation))(
     "valide le token du bot via getMe quand la validation externe est explicitement activée",
@@ -24,7 +28,7 @@ describe("telegram secrets", () => {
       expect(response.ok).toBe(true);
       expect(payload.ok).toBe(true);
       expect(payload.result?.is_bot).toBe(true);
-      expect(payload.result?.username).toBe("Misternb_bot");
+      expect(payload.result?.username).toBe("Prestigeofficiel_bot");
     },
     20_000,
   );

@@ -45,7 +45,7 @@ describe("renderBroadcastMessage", () => {
   });
 
   it("substitutes {brand}", () => {
-    expect(renderBroadcastMessage("Welcome to {brand}", "Sami")).toBe("Welcome to MAXIME");
+    expect(renderBroadcastMessage("Welcome to {brand}", "Sami")).toBe("Welcome to Prestige");
   });
 });
 

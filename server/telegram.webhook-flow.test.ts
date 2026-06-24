@@ -103,7 +103,10 @@ async function waitForValue<T>(loader: () => Promise<T>, predicate: (value: T) =
   return loader();
 }
 
-describe("telegram webhook durable funnel flow", () => {
+// This is a true integration test — it boots a real express app and exercises
+// the webhook end-to-end against a live MySQL connection. Skip locally when
+// DATABASE_URL is not configured; run in CI / Railway where the DB is reachable.
+describe.skipIf(!process.env.DATABASE_URL)("telegram webhook durable funnel flow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
