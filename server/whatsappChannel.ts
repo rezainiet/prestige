@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { getSetting, upsertSetting } from "./db";
 import { log } from "./_core/logger";
 import { getTelegramGroupUrl } from "./telegramGroupLink";
@@ -7,9 +8,7 @@ import { getTelegramGroupUrl } from "./telegramGroupLink";
 export const WHATSAPP_CHANNEL_URL_SETTING_KEY = "whatsapp_channel_url";
 const CHANNEL_URL_SEED_VERSION_SETTING_KEY = "channel_url_seed_version";
 
-export type ChannelUrlValidation =
-  | { ok: true; value: string }
-  | { ok: false; error: string };
+export type ChannelUrlValidation = { ok: true; value: string } | { ok: false; error: string };
 
 export function validateChannelUrl(rawValue: string): ChannelUrlValidation {
   const value = rawValue.trim();
@@ -19,7 +18,10 @@ export function validateChannelUrl(rawValue: string): ChannelUrlValidation {
   try {
     parsed = new URL(value);
   } catch {
-    return { ok: false, error: "Enter a valid WhatsApp or Telegram channel URL." };
+    return {
+      ok: false,
+      error: "Enter a valid WhatsApp or Telegram channel URL.",
+    };
   }
 
   if (parsed.protocol !== "https:") {
@@ -31,19 +33,28 @@ export function validateChannelUrl(rawValue: string): ChannelUrlValidation {
 
   if (host === "whatsapp.com") {
     if (!/^\/channel\/[A-Za-z0-9]+$/.test(path)) {
-      return { ok: false, error: "WhatsApp links must use https://whatsapp.com/channel/..." };
+      return {
+        ok: false,
+        error: "WhatsApp links must use https://whatsapp.com/channel/...",
+      };
     }
     return { ok: true, value: parsed.toString().replace(/\/$/, "") };
   }
 
   if (host === "t.me" || host === "telegram.me" || host === "telegram.org") {
     if (!path || path === "/") {
-      return { ok: false, error: "Telegram link must include a channel or invite path." };
+      return {
+        ok: false,
+        error: "Telegram link must include a channel or invite path.",
+      };
     }
     return { ok: true, value: parsed.toString().replace(/\/$/, "") };
   }
 
-  return { ok: false, error: "Only WhatsApp or Telegram channel links are supported." };
+  return {
+    ok: false,
+    error: "Only WhatsApp or Telegram channel links are supported.",
+  };
 }
 
 /**
@@ -58,7 +69,9 @@ export async function seedConfiguredChannelUrl() {
 
   const validation = validateChannelUrl(configuredUrl);
   if (!validation.ok) {
-    log.error("whatsappChannel", "seed_url_invalid", { error: validation.error });
+    log.error("whatsappChannel", "seed_url_invalid", {
+      error: validation.error,
+    });
     return;
   }
 
@@ -178,9 +191,41 @@ function redirectBase(): string {
   return appBase.replace(/\/+$/, "");
 }
 
+function redirectSigningSecret(): string {
+  return (process.env.WHATSAPP_REDIRECT_SIGNING_SECRET || process.env.JWT_SECRET || process.env.TELEGRAM_WEBHOOK_SECRET || "").trim();
+}
+
+function redirectSignaturePayload(args: { telegramUserId: string | number; sessionToken?: string | null; funnelToken?: string | null }) {
+  return [String(args.telegramUserId), args.sessionToken || "", args.funnelToken || ""].join("|");
+}
+
+export function signWhatsAppRedirect(args: {
+  telegramUserId: string | number;
+  sessionToken?: string | null;
+  funnelToken?: string | null;
+}): string {
+  const secret = redirectSigningSecret();
+  if (!secret) return "";
+  return crypto.createHmac("sha256", secret).update(redirectSignaturePayload(args)).digest("base64url");
+}
+
+export function verifyWhatsAppRedirectSignature(args: {
+  telegramUserId: string | number;
+  sessionToken?: string | null;
+  funnelToken?: string | null;
+  signature?: string | null;
+}): boolean {
+  if (!args.signature) return false;
+  const expected = signWhatsAppRedirect(args);
+  if (!expected) return false;
+  const suppliedBuffer = Buffer.from(args.signature);
+  const expectedBuffer = Buffer.from(expected);
+  return suppliedBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(suppliedBuffer, expectedBuffer);
+}
+
 /**
  * Build the per-user WhatsApp redirect URL shipped in the welcome DM and every
- * reminder: {BASE}/wa-go?u={telegramUserId}&s={sessionToken}&f={funnelToken}.
+ * reminder: {BASE}/wa-go?u={telegramUserId}&s={sessionToken}&f={funnelToken}&k={signature}.
  * Session/funnel tokens are carried through so the async Lead can reconstruct
  * attribution (fbp/fbc/UTMs) from the original landing session.
  */
@@ -194,5 +239,7 @@ export function buildWhatsAppRedirectUrl(args: {
   params.set("u", String(args.telegramUserId));
   if (args.sessionToken) params.set("s", args.sessionToken);
   if (args.funnelToken) params.set("f", args.funnelToken);
+  const signature = signWhatsAppRedirect(args);
+  if (signature) params.set("k", signature);
   return `${base}/wa-go?${params.toString()}`;
 }

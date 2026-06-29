@@ -37,21 +37,26 @@ vi.mock("./db", () => ({
 }));
 
 vi.mock("./facebookCapi", () => ({
+  buildCapiEventPayload: vi.fn((_eventName, payload) => ({
+    eventId: payload.eventId,
+    body: { data: [{ event_name: "PageView", event_id: payload.eventId }] },
+  })),
   sendPageView: vi.fn(),
   sendSubscribe: vi.fn(),
   sendContact: vi.fn(),
   sendScrollDepth: vi.fn(),
 }));
 
+vi.mock("./metaCapi", () => ({
+  buildServerFbc: vi.fn(),
+  postMetaPayload: vi.fn(),
+  retryStoredMetaRequest: vi.fn(),
+}));
+
 import type { TrpcContext } from "./_core/context";
 import { appRouter } from "./routers";
-import {
-  createMetaEventLog,
-  insertUtmSession,
-  recordEvent,
-  updateMetaEventLog,
-} from "./db";
-import { sendPageView } from "./facebookCapi";
+import { createMetaEventLog, insertUtmSession, recordEvent, updateMetaEventLog } from "./db";
+import { postMetaPayload } from "./metaCapi";
 
 function createContext(): TrpcContext {
   return {
@@ -107,8 +112,8 @@ describe("Funnel hardening — server-side P0/P1 fixes", () => {
       vi.mocked(createMetaEventLog).mockImplementation(async () => {
         callOrder.push("createMetaEventLog");
       });
-      vi.mocked(sendPageView).mockImplementation(async () => {
-        callOrder.push("sendPageView");
+      vi.mocked(postMetaPayload).mockImplementation(async () => {
+        callOrder.push("postMetaPayload");
         return {
           success: true,
           eventId: "pv_test_123",
@@ -132,7 +137,7 @@ describe("Funnel hardening — server-side P0/P1 fixes", () => {
       });
 
       // Order must be: log first (queued), then send Meta, then update log.
-      expect(callOrder).toEqual(["createMetaEventLog", "sendPageView", "updateMetaEventLog"]);
+      expect(callOrder).toEqual(["createMetaEventLog", "postMetaPayload", "updateMetaEventLog"]);
 
       // The first log row must use status='queued' (recoverable on crash).
       const firstLog = vi.mocked(createMetaEventLog).mock.calls[0][0];
@@ -141,7 +146,7 @@ describe("Funnel hardening — server-side P0/P1 fixes", () => {
     });
 
     it("uses the same eventId for the log row and the Meta call (no random fallback collision)", async () => {
-      vi.mocked(sendPageView).mockResolvedValue({
+      vi.mocked(postMetaPayload).mockResolvedValue({
         success: true,
         eventId: "pv_unique_id",
         retryable: false,
@@ -162,7 +167,7 @@ describe("Funnel hardening — server-side P0/P1 fixes", () => {
     });
 
     it("mints a deterministic eventId when the client did not provide one and reuses it across log + send", async () => {
-      vi.mocked(sendPageView).mockResolvedValue({
+      vi.mocked(postMetaPayload).mockResolvedValue({
         success: true,
         eventId: "ignored_by_caller",
         retryable: false,
@@ -177,7 +182,7 @@ describe("Funnel hardening — server-side P0/P1 fixes", () => {
 
       const logEventId = vi.mocked(createMetaEventLog).mock.calls[0][0].eventId;
       const updateEventId = vi.mocked(updateMetaEventLog).mock.calls[0][0];
-      const sentEventId = vi.mocked(sendPageView).mock.calls[0][0]?.eventId;
+      const sentEventId = vi.mocked(postMetaPayload).mock.calls[0][0];
 
       expect(logEventId).toBeTruthy();
       expect(logEventId).toBe(updateEventId);

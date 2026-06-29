@@ -23,27 +23,11 @@ import {
   upsertTelegramLinkage,
 } from "./db";
 import { fireSubscribeEvent, fireTelegramJoinLeadEvent } from "./metaCapi";
-import {
-  buildTelegramAdminReportText,
-  isTelegramAdminAuthorized,
-} from "./telegramAdminReports";
-import {
-  approveChatJoinRequest,
-  buildJoinGroupKeyboard,
-  declineChatJoinRequest,
-  sendTelegramMessage,
-} from "./telegramBot";
-import {
-  DEFAULT_TELEGRAM_GROUP_URL,
-  getTelegramGroupUrl,
-  replaceTelegramGroupUrlInText,
-} from "./telegramGroupLink";
+import { buildTelegramAdminReportText, isTelegramAdminAuthorized } from "./telegramAdminReports";
+import { approveChatJoinRequest, buildJoinGroupKeyboard, declineChatJoinRequest, sendTelegramMessage } from "./telegramBot";
+import { DEFAULT_TELEGRAM_GROUP_URL, getTelegramGroupUrl, replaceTelegramGroupUrlInText } from "./telegramGroupLink";
 import { getTelegramChannelId } from "./telegramChannel";
-import {
-  renderTelegramWelcomeMessage,
-  scheduleTelegramReminderSequence,
-  skipPendingTelegramReminderJobs,
-} from "./telegramReminders";
+import { renderTelegramWelcomeMessage, scheduleTelegramReminderSequence, skipPendingTelegramReminderJobs } from "./telegramReminders";
 import { buildWhatsAppRedirectUrl } from "./whatsappChannel";
 
 const TELEGRAM_DIRECT_CONTACT = "@prest_original";
@@ -222,7 +206,10 @@ async function fireSubscribeForJoin(args: {
   session?: Awaited<ReturnType<typeof resolveLandingSession>>;
   sessionToken: string | null;
   funnelToken: string | null;
-}): Promise<{ eventId: string; status: "sent" | "retrying" | "failed" } | null> {
+}): Promise<{
+  eventId: string;
+  status: "sent" | "retrying" | "failed";
+} | null> {
   // Cross-path dedupe: don't double-send if /start already fired Subscribe.
   if (await hasSentSubscribeForTelegramUser(args.telegramUserId)) {
     log.info("telegramWebhook", "subscribe_skipped_already_sent_for_user", {
@@ -412,13 +399,7 @@ async function fireLeadForJoin(args: {
   }
 }
 
-async function handleNewMember(
-  user: TelegramUser,
-  chat: TelegramChat,
-  date: number,
-  ip: string | null,
-  ua: string | null,
-) {
+async function handleNewMember(user: TelegramUser, chat: TelegramChat, date: number, ip: string | null, ua: string | null) {
   const telegramUserId = String(user.id);
   const channelId = String(chat.id);
 
@@ -437,11 +418,7 @@ async function handleNewMember(
   const resolvedFunnelToken = linkage?.funnelToken || storedBotStart?.funnelToken || null;
   const session = await resolveLandingSession(resolvedSessionToken, resolvedFunnelToken);
 
-  const attributionStatus = session
-    ? "attributed_join"
-    : storedBotStart
-      ? "unattributed_join"
-      : "bypass_join";
+  const attributionStatus = session ? "attributed_join" : storedBotStart ? "unattributed_join" : "bypass_join";
 
   // Default: mirror the /start-time Meta event id/status onto the join row
   // so the dashboard's join → meta_event_logs lookup still works for
@@ -453,7 +430,10 @@ async function handleNewMember(
   // If the user joined the channel WITHOUT going through /start, /start
   // never fired Subscribe — fire it here so Meta sees the conversion.
   // Idempotency is enforced inside fireSubscribeForJoin.
-  let firedSubscribeOnJoin: { eventId: string; status: "sent" | "retrying" | "failed" } | null = null;
+  let firedSubscribeOnJoin: {
+    eventId: string;
+    status: "sent" | "retrying" | "failed";
+  } | null = null;
   if (!storedBotStart || storedBotStart.metaSubscribeStatus !== "sent") {
     firedSubscribeOnJoin = await fireSubscribeForJoin({
       telegramUserId,
@@ -470,11 +450,7 @@ async function handleNewMember(
     });
     if (firedSubscribeOnJoin) {
       joinMetaEventId = firedSubscribeOnJoin.eventId;
-      joinMetaStatus = firedSubscribeOnJoin.status === "sent"
-        ? "sent"
-        : firedSubscribeOnJoin.status === "retrying"
-          ? "retrying"
-          : "failed";
+      joinMetaStatus = firedSubscribeOnJoin.status === "sent" ? "sent" : firedSubscribeOnJoin.status === "retrying" ? "retrying" : "failed";
     }
   }
 
@@ -556,7 +532,9 @@ export function setupTelegramWebhook(app: Express) {
     if (updateId !== null) {
       const freshInMemory = rememberUpdateIdInMemory(updateId);
       if (!freshInMemory) {
-        log.info("telegramWebhook", "duplicate_update_dropped_memory", { updateId });
+        log.info("telegramWebhook", "duplicate_update_dropped_memory", {
+          updateId,
+        });
         res.json({ ok: true });
         return;
       }
@@ -570,7 +548,9 @@ export function setupTelegramWebhook(app: Express) {
       try {
         const freshInDb = await tryRecordTelegramUpdateId(updateId);
         if (!freshInDb) {
-          log.info("telegramWebhook", "duplicate_update_dropped_db", { updateId });
+          log.info("telegramWebhook", "duplicate_update_dropped_db", {
+            updateId,
+          });
           res.json({ ok: true });
           return;
         }
@@ -617,10 +597,7 @@ export function setupTelegramWebhook(app: Express) {
   });
 
   async function processTelegramUpdate(req: Request, update: TelegramUpdate) {
-    const ip =
-      (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
-      req.socket?.remoteAddress ||
-      null;
+    const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket?.remoteAddress || null;
     const ua = (req.headers["user-agent"] as string) || null;
     const telegramMessage = update.message;
     const messageText = telegramMessage?.text?.trim() || "";
@@ -655,7 +632,16 @@ export function setupTelegramWebhook(app: Express) {
         });
       }
 
-      const linkage = await getTelegramLinkageByUserId(userId);
+      const storedLinkage = await getTelegramLinkageByUserId(userId);
+      const linkageExpiresAt = storedLinkage?.expiresAt ? new Date(storedLinkage.expiresAt).getTime() : 0;
+      const linkage = storedLinkage && !storedLinkage.resolvedAt && linkageExpiresAt > Date.now() ? storedLinkage : undefined;
+      if (storedLinkage && !linkage && !decoded) {
+        log.info("telegramWebhook", "stale_linkage_ignored", {
+          telegramUserId: userId,
+          resolved: Boolean(storedLinkage.resolvedAt),
+          expired: linkageExpiresAt <= Date.now(),
+        });
+      }
       const session = await resolveLandingSession(
         decoded?.sessionToken || linkage?.sessionToken || null,
         decoded?.funnelToken || linkage?.funnelToken || null,
@@ -679,10 +665,8 @@ export function setupTelegramWebhook(app: Express) {
 
       // /start persists attribution and delivers a tracked channel URL.
       // Subscribe is emitted by /wa-go when the user actually clicks.
-      const sessionToken =
-        decoded?.sessionToken || linkage?.sessionToken || session?.sessionToken || null;
-      const funnelToken =
-        decoded?.funnelToken || linkage?.funnelToken || session?.funnelToken || null;
+      const sessionToken = decoded?.sessionToken || linkage?.sessionToken || session?.sessionToken || null;
+      const funnelToken = decoded?.funnelToken || linkage?.funnelToken || session?.funnelToken || null;
       const groupUrl = buildWhatsAppRedirectUrl({
         telegramUserId: userId,
         sessionToken,
@@ -699,10 +683,10 @@ export function setupTelegramWebhook(app: Express) {
       });
 
       const welcomeBody = welcomeMsg
-        ? renderTelegramWelcomeMessage(
-            replaceTelegramGroupUrlInText(welcomeMsg, groupUrl),
-            { firstName: telegramMessage.from.first_name || null, groupUrl },
-          )
+        ? renderTelegramWelcomeMessage(replaceTelegramGroupUrlInText(welcomeMsg, groupUrl), {
+            firstName: telegramMessage.from.first_name || null,
+            groupUrl,
+          })
         : buildDefaultWelcomeMessage(groupUrl);
       await sendTelegramMessage(telegramMessage.from.id, welcomeBody, {
         replyMarkup: buildJoinGroupKeyboard(groupUrl),
@@ -828,12 +812,7 @@ export function setupTelegramWebhook(app: Express) {
       body: JSON.stringify({
         url: webhookUrl,
         secret_token: getWebhookSecret(),
-        allowed_updates: [
-          "chat_member",
-          "my_chat_member",
-          "message",
-          "chat_join_request",
-        ],
+        allowed_updates: ["chat_member", "my_chat_member", "message", "chat_join_request"],
       }),
     });
 

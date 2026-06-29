@@ -141,19 +141,37 @@ const DAILY_STAT_COUNTER_BY_EVENT: Record<string, DailyStatCounter> = {
 
 function dailyCounterIncrement(counter: DailyStatCounter) {
   switch (counter) {
-    case "pageviews": return sql`${dailyStats.pageviews} + 1`;
-    case "uniqueVisitors": return sql`${dailyStats.uniqueVisitors} + 1`;
-    case "whatsappClicks": return sql`${dailyStats.whatsappClicks} + 1`;
-    case "telegramClicks": return sql`${dailyStats.telegramClicks} + 1`;
-    case "scroll25": return sql`${dailyStats.scroll25} + 1`;
-    case "scroll50": return sql`${dailyStats.scroll50} + 1`;
-    case "scroll75": return sql`${dailyStats.scroll75} + 1`;
-    case "scroll100": return sql`${dailyStats.scroll100} + 1`;
+    case "pageviews":
+      return sql`${dailyStats.pageviews} + 1`;
+    case "uniqueVisitors":
+      return sql`${dailyStats.uniqueVisitors} + 1`;
+    case "whatsappClicks":
+      return sql`${dailyStats.whatsappClicks} + 1`;
+    case "telegramClicks":
+      return sql`${dailyStats.telegramClicks} + 1`;
+    case "scroll25":
+      return sql`${dailyStats.scroll25} + 1`;
+    case "scroll50":
+      return sql`${dailyStats.scroll50} + 1`;
+    case "scroll75":
+      return sql`${dailyStats.scroll75} + 1`;
+    case "scroll100":
+      return sql`${dailyStats.scroll100} + 1`;
   }
 }
 
-type RecordEventStats = { ok: number; failed: number; lastError: string | null; lastErrorAt: Date | null };
-const recordEventStats: RecordEventStats = { ok: 0, failed: 0, lastError: null, lastErrorAt: null };
+type RecordEventStats = {
+  ok: number;
+  failed: number;
+  lastError: string | null;
+  lastErrorAt: Date | null;
+};
+const recordEventStats: RecordEventStats = {
+  ok: 0,
+  failed: 0,
+  lastError: null,
+  lastErrorAt: null,
+};
 
 export function getRecordEventStats(): Readonly<RecordEventStats> {
   return { ...recordEventStats };
@@ -195,7 +213,9 @@ export async function recordEvent(event: InsertTrackingEvent) {
     await db
       .insert(dailyStats)
       .values(insertValues)
-      .onDuplicateKeyUpdate({ set: { [counter]: dailyCounterIncrement(counter) } });
+      .onDuplicateKeyUpdate({
+        set: { [counter]: dailyCounterIncrement(counter) },
+      });
 
     recordEventStats.ok += 1;
   } catch (error) {
@@ -297,8 +317,7 @@ function emptyMetrics(): DashboardBaseMetrics {
 
 function addDerivedMetrics(metrics: DashboardBaseMetrics): DashboardTotals {
   const totalContacts = metrics.whatsappClicks + metrics.telegramClicks;
-  const conversionRate =
-    metrics.pageviews > 0 ? ((totalContacts / metrics.pageviews) * 100).toFixed(1) : "0.0";
+  const conversionRate = metrics.pageviews > 0 ? ((totalContacts / metrics.pageviews) * 100).toFixed(1) : "0.0";
 
   return {
     ...metrics,
@@ -346,7 +365,13 @@ function buildRangeFromPreset(
   preset: DashboardPreset,
   startDate?: string,
   endDate?: string,
-): { preset: DashboardPreset; label: string; start: Date; end: Date; sinceMidnight: boolean } {
+): {
+  preset: DashboardPreset;
+  label: string;
+  start: Date;
+  end: Date;
+  sinceMidnight: boolean;
+} {
   const now = new Date();
   const todayStart = startOfDay(now);
 
@@ -618,12 +643,7 @@ async function buildLiveSnapshot(): Promise<DashboardLiveSnapshot> {
   let adStatus: DashboardLiveSnapshot["adStatus"] = "idle";
   let adStatusLabel = "Aucune activité récente";
 
-  if (
-    last5Minutes.pageviews >= 1 ||
-    last5Minutes.uniqueVisitors >= 1 ||
-    last10Minutes.totalContacts >= 1 ||
-    hasVeryRecentSignal
-  ) {
+  if (last5Minutes.pageviews >= 1 || last5Minutes.uniqueVisitors >= 1 || last10Minutes.totalContacts >= 1 || hasVeryRecentSignal) {
     adStatus = "active";
     adStatusLabel = "Publicité active maintenant";
   } else if (last4Hours.pageviews >= 1 || last4Hours.uniqueVisitors >= 1 || hasWarmSignal) {
@@ -743,11 +763,7 @@ export async function insertUtmSession(session: InsertUtmSession) {
 export async function getUtmSessionByToken(sessionToken: string) {
   const db = await getDb();
   if (!db) return undefined;
-  const rows = await db
-    .select()
-    .from(utmSessions)
-    .where(eq(utmSessions.sessionToken, sessionToken))
-    .limit(1);
+  const rows = await db.select().from(utmSessions).where(eq(utmSessions.sessionToken, sessionToken)).limit(1);
   return rows[0];
 }
 
@@ -789,15 +805,19 @@ export async function upsertTelegramLinkage(link: InsertTelegramLinkage) {
     return;
   }
 
+  const hasNewAttribution = Boolean(link.sessionToken || link.funnelToken);
   await db
     .update(telegramLinkages)
     .set({
-      funnelToken: existing.funnelToken ?? link.funnelToken ?? null,
-      sessionToken: existing.sessionToken ?? link.sessionToken ?? null,
+      // A new deep link represents a new visit/campaign. Prefer its tokens so
+      // returning Telegram users are not permanently attributed to their
+      // first-ever ad click.
+      funnelToken: hasNewAttribution ? (link.funnelToken ?? null) : (existing.funnelToken ?? null),
+      sessionToken: hasNewAttribution ? (link.sessionToken ?? null) : (existing.sessionToken ?? null),
       payloadType: link.payloadType ?? existing.payloadType ?? "group",
       payloadSource: link.payloadSource ?? existing.payloadSource ?? null,
       expiresAt: link.expiresAt ?? existing.expiresAt ?? null,
-      resolvedAt: existing.resolvedAt ?? null,
+      resolvedAt: hasNewAttribution ? null : (existing.resolvedAt ?? null),
       updatedAt: new Date(),
     })
     .where(eq(telegramLinkages.telegramUserId, link.telegramUserId));
@@ -806,11 +826,7 @@ export async function upsertTelegramLinkage(link: InsertTelegramLinkage) {
 export async function getTelegramLinkageByUserId(telegramUserId: string) {
   const db = await getDb();
   if (!db) return undefined;
-  const rows = await db
-    .select()
-    .from(telegramLinkages)
-    .where(eq(telegramLinkages.telegramUserId, telegramUserId))
-    .limit(1);
+  const rows = await db.select().from(telegramLinkages).where(eq(telegramLinkages.telegramUserId, telegramUserId)).limit(1);
   return rows[0];
 }
 
@@ -897,8 +913,13 @@ export async function getRetryableMetaEvents(limit = 25) {
     .from(metaEventLogs)
     .where(
       and(
-        eq(metaEventLogs.retryable, 1),
-        or(eq(metaEventLogs.status, "failed"), eq(metaEventLogs.status, "retrying")),
+        or(
+          // A process may die after durable enqueue but before the first Meta
+          // request. Queued rows must therefore be replayable even though
+          // retryable has not yet been set by an HTTP outcome.
+          eq(metaEventLogs.status, "queued"),
+          and(eq(metaEventLogs.retryable, 1), or(eq(metaEventLogs.status, "failed"), eq(metaEventLogs.status, "retrying"))),
+        ),
         lte(metaEventLogs.attemptCount, 15),
         or(isNull(metaEventLogs.nextRetryAt), lte(metaEventLogs.nextRetryAt, now)),
       ),
@@ -919,12 +940,7 @@ export async function hasSentSubscribeForTelegramUser(telegramUserId: string) {
   const rows = await db
     .select({ eventId: metaEventLogs.eventId, status: metaEventLogs.status })
     .from(metaEventLogs)
-    .where(
-      and(
-        eq(metaEventLogs.telegramUserId, telegramUserId),
-        eq(metaEventLogs.eventType, "Subscribe"),
-      ),
-    )
+    .where(and(eq(metaEventLogs.telegramUserId, telegramUserId), eq(metaEventLogs.eventType, "Subscribe")))
     .limit(10);
   return rows.some((r) => r.status === "sent" || r.status === "queued" || r.status === "retrying");
 }
@@ -935,24 +951,27 @@ export async function upsertBotStart(start: InsertBotStart) {
 
   const existing = await getBotStartByTelegramUserId(start.telegramUserId);
   const providedSession = start.sessionToken ? await getUtmSessionByToken(start.sessionToken) : undefined;
-  const existingSession = !providedSession && existing?.sessionToken
-    ? await getUtmSessionByToken(existing.sessionToken)
-    : undefined;
+  const existingSession = !providedSession && existing?.sessionToken ? await getUtmSessionByToken(existing.sessionToken) : undefined;
   const linkedSession = providedSession || existingSession;
 
-  const sessionToken = existing?.sessionToken ?? start.sessionToken ?? null;
-  const funnelToken = existing?.funnelToken ?? start.funnelToken ?? linkedSession?.funnelToken ?? null;
-  const utmSource = existing?.utmSource ?? start.utmSource ?? linkedSession?.utmSource ?? null;
-  const utmMedium = existing?.utmMedium ?? start.utmMedium ?? linkedSession?.utmMedium ?? null;
-  const utmCampaign = existing?.utmCampaign ?? start.utmCampaign ?? linkedSession?.utmCampaign ?? null;
-  const utmContent = existing?.utmContent ?? start.utmContent ?? linkedSession?.utmContent ?? null;
-  const utmTerm = existing?.utmTerm ?? start.utmTerm ?? linkedSession?.utmTerm ?? null;
-  const fbclid = existing?.fbclid ?? start.fbclid ?? linkedSession?.fbclid ?? null;
-  const fbp = existing?.fbp ?? start.fbp ?? linkedSession?.fbp ?? null;
+  const hasNewAttribution = Boolean(start.sessionToken || start.funnelToken);
+  const sessionToken = hasNewAttribution ? (start.sessionToken ?? null) : (existing?.sessionToken ?? null);
+  const funnelToken = hasNewAttribution ? (start.funnelToken ?? linkedSession?.funnelToken ?? null) : (existing?.funnelToken ?? null);
+  // When /start carries a new landing identity, replace the prior campaign
+  // snapshot completely—even null fields are meaningful ("this visit was
+  // direct"). Organic /start without a payload still preserves the last
+  // known attribution instead of erasing it.
+  const pickAttribution = <T>(incoming: T | null | undefined, linked: T | null | undefined, previous: T | null | undefined): T | null =>
+    hasNewAttribution ? (incoming ?? linked ?? null) : (previous ?? incoming ?? linked ?? null);
+  const utmSource = pickAttribution(start.utmSource, linkedSession?.utmSource, existing?.utmSource);
+  const utmMedium = pickAttribution(start.utmMedium, linkedSession?.utmMedium, existing?.utmMedium);
+  const utmCampaign = pickAttribution(start.utmCampaign, linkedSession?.utmCampaign, existing?.utmCampaign);
+  const utmContent = pickAttribution(start.utmContent, linkedSession?.utmContent, existing?.utmContent);
+  const utmTerm = pickAttribution(start.utmTerm, linkedSession?.utmTerm, existing?.utmTerm);
+  const fbclid = pickAttribution(start.fbclid, linkedSession?.fbclid, existing?.fbclid);
+  const fbp = pickAttribution(start.fbp, linkedSession?.fbp, existing?.fbp);
   const computedAttribution =
-    sessionToken || funnelToken || utmSource || utmCampaign || fbclid || fbp
-      ? ("attributed_start" as const)
-      : ("organic_start" as const);
+    sessionToken || funnelToken || utmSource || utmCampaign || fbclid || fbp ? ("attributed_start" as const) : ("organic_start" as const);
   // Promote to attributed_start if attribution was previously missing but is now available.
   const attributionStatus =
     existing?.attributionStatus && existing.attributionStatus !== "organic_start" && existing.attributionStatus !== "unknown_start"
@@ -1007,11 +1026,7 @@ export async function upsertBotStart(start: InsertBotStart) {
 export async function getBotStartByTelegramUserId(telegramUserId: string) {
   const db = await getDb();
   if (!db) return undefined;
-  const rows = await db
-    .select()
-    .from(botStarts)
-    .where(eq(botStarts.telegramUserId, telegramUserId))
-    .limit(1);
+  const rows = await db.select().from(botStarts).where(eq(botStarts.telegramUserId, telegramUserId)).limit(1);
   return rows[0];
 }
 
@@ -1035,10 +1050,7 @@ export async function updateBotStartMetaStatus(
 export async function markBotStartJoined(telegramUserId: string) {
   const db = await getDb();
   if (!db) return;
-  await db
-    .update(botStarts)
-    .set({ joinedAt: new Date() })
-    .where(eq(botStarts.telegramUserId, telegramUserId));
+  await db.update(botStarts).set({ joinedAt: new Date() }).where(eq(botStarts.telegramUserId, telegramUserId));
 }
 
 /**
@@ -1057,11 +1069,7 @@ export async function markBotStartJoinedIfFirst(telegramUserId: string): Promise
   return Number(res?.affectedRows ?? 0) > 0;
 }
 
-export async function setBotStartPersonalInviteLink(
-  telegramUserId: string,
-  inviteLink: string,
-  expiresAt: Date,
-) {
+export async function setBotStartPersonalInviteLink(telegramUserId: string, inviteLink: string, expiresAt: Date) {
   const db = await getDb();
   if (!db) return;
   await db
@@ -1108,9 +1116,7 @@ export async function getValidPersonalInviteLink(telegramUserId: string): Promis
     .limit(1);
   const row = rows[0];
   if (!row?.personalInviteLink) return null;
-  const expiresAt = row.personalInviteLinkExpiresAt
-    ? new Date(row.personalInviteLinkExpiresAt)
-    : null;
+  const expiresAt = row.personalInviteLinkExpiresAt ? new Date(row.personalInviteLinkExpiresAt) : null;
   if (!expiresAt) return row.personalInviteLink;
   // 1h safety margin so we don't hand out a link about to expire mid-message.
   if (expiresAt.getTime() - Date.now() <= 60 * 60 * 1000) return null;
@@ -1178,11 +1184,7 @@ export async function getJoinRequestDecisionStats() {
 export async function getSetting(settingKey: string) {
   const db = await getDb();
   if (!db) return null;
-  const rows = await db
-    .select()
-    .from(siteSettings)
-    .where(eq(siteSettings.settingKey, settingKey))
-    .limit(1);
+  const rows = await db.select().from(siteSettings).where(eq(siteSettings.settingKey, settingKey)).limit(1);
   return rows[0]?.settingValue ?? null;
 }
 
@@ -1196,9 +1198,12 @@ export async function upsertSetting(settingKey: string, settingValue: string) {
   const db = await getDb();
   if (!db) return;
   const values: InsertSiteSetting = { settingKey, settingValue };
-  await db.insert(siteSettings).values(values).onDuplicateKeyUpdate({
-    set: { settingValue, updatedAt: new Date() },
-  });
+  await db
+    .insert(siteSettings)
+    .values(values)
+    .onDuplicateKeyUpdate({
+      set: { settingValue, updatedAt: new Date() },
+    });
 }
 
 // === Broadcast ===
@@ -1235,9 +1240,7 @@ export async function getBroadcastRecipients(): Promise<BroadcastRecipient[]> {
 export async function countBroadcastRecipients(): Promise<number> {
   const db = await getDb();
   if (!db) return 0;
-  const [row]: any = await db.execute(
-    sql`SELECT COUNT(*) AS n FROM bot_starts WHERE botBlocked = 0`,
-  );
+  const [row]: any = await db.execute(sql`SELECT COUNT(*) AS n FROM bot_starts WHERE botBlocked = 0`);
   return Number(row?.[0]?.n ?? row?.n ?? 0) || 0;
 }
 
@@ -1258,10 +1261,7 @@ export async function createBroadcastJob(input: {
   return insertId || null;
 }
 
-export async function enqueueBroadcastDeliveries(
-  broadcastJobId: number,
-  recipients: BroadcastRecipient[],
-): Promise<void> {
+export async function enqueueBroadcastDeliveries(broadcastJobId: number, recipients: BroadcastRecipient[]): Promise<void> {
   if (recipients.length === 0) return;
   const db = await getDb();
   if (!db) return;
@@ -1280,9 +1280,12 @@ export async function enqueueBroadcastDeliveries(
     // ON DUPLICATE KEY UPDATE is a no-op here — the unique (jobId, userId)
     // index protects against accidental re-enqueue. Use insert.ignore so a
     // retry doesn't fail.
-    await db.insert(broadcastDeliveries).values(values).onDuplicateKeyUpdate({
-      set: { updatedAt: new Date() },
-    });
+    await db
+      .insert(broadcastDeliveries)
+      .values(values)
+      .onDuplicateKeyUpdate({
+        set: { updatedAt: new Date() },
+      });
   }
 }
 
@@ -1313,21 +1316,12 @@ export async function getNextPendingBroadcastDeliveries(jobId: number, limit: nu
   return db
     .select()
     .from(broadcastDeliveries)
-    .where(
-      and(
-        eq(broadcastDeliveries.broadcastJobId, jobId),
-        eq(broadcastDeliveries.status, "pending"),
-      ),
-    )
+    .where(and(eq(broadcastDeliveries.broadcastJobId, jobId), eq(broadcastDeliveries.status, "pending")))
     .orderBy(asc(broadcastDeliveries.id))
     .limit(limit);
 }
 
-export async function markBroadcastDelivery(args: {
-  id: number;
-  status: "sent" | "blocked" | "failed";
-  errorDescription?: string | null;
-}) {
+export async function markBroadcastDelivery(args: { id: number; status: "sent" | "blocked" | "failed"; errorDescription?: string | null }) {
   const db = await getDb();
   if (!db) return;
   const now = new Date();
@@ -1344,12 +1338,7 @@ export async function markBroadcastDelivery(args: {
     .where(eq(broadcastDeliveries.id, args.id));
 }
 
-export async function bumpBroadcastJobCounters(args: {
-  jobId: number;
-  sent?: number;
-  blocked?: number;
-  failed?: number;
-}) {
+export async function bumpBroadcastJobCounters(args: { jobId: number; sent?: number; blocked?: number; failed?: number }) {
   const db = await getDb();
   if (!db) return;
   await db
@@ -1370,10 +1359,7 @@ export async function finalizeBroadcastJobIfDone(jobId: number) {
   );
   const pending = Number(pendingRow?.[0]?.n ?? pendingRow?.n ?? 0) || 0;
   if (pending > 0) return false;
-  await db
-    .update(broadcastJobs)
-    .set({ status: "completed", completedAt: new Date() })
-    .where(eq(broadcastJobs.id, jobId));
+  await db.update(broadcastJobs).set({ status: "completed", completedAt: new Date() }).where(eq(broadcastJobs.id, jobId));
   return true;
 }
 
@@ -1459,7 +1445,12 @@ export async function getJoinsByCampaign() {
     GROUP BY COALESCE(NULLIF(tj.utmCampaign, ''), 'Direct / inconnu')
     ORDER BY joinsCount DESC
   `);
-  return rows as Array<{ campaign: string; joinsCount: number; metaSentCount: number; attributedCount: number }>;
+  return rows as Array<{
+    campaign: string;
+    joinsCount: number;
+    metaSentCount: number;
+    attributedCount: number;
+  }>;
 }
 
 export async function getBotStartStats() {
@@ -1506,7 +1497,12 @@ export async function getBotStartsByCampaign() {
     GROUP BY COALESCE(NULLIF(utmCampaign, ''), 'Direct / inconnu')
     ORDER BY startsCount DESC
   `);
-  return rows as Array<{ campaign: string; startsCount: number; joinedCount: number; attributedCount: number }>;
+  return rows as Array<{
+    campaign: string;
+    startsCount: number;
+    joinedCount: number;
+    attributedCount: number;
+  }>;
 }
 
 export async function getRecentMetaActivityWindow(windowMs = 60 * 60 * 1000) {
@@ -1927,11 +1923,7 @@ export async function getTelegramCumulativeReportStats(startAt: Date, endAt: Dat
 export async function getTelegramRecipientsByUsernames(usernames: string[]) {
   const db = await getDb();
   const normalizedUsernames = Array.from(
-    new Set(
-      usernames
-        .map((username) => username.replace(/^@/, "").trim().toLowerCase())
-        .filter(Boolean),
-    ),
+    new Set(usernames.map((username) => username.replace(/^@/, "").trim().toLowerCase()).filter(Boolean)),
   );
 
   if (!db || normalizedUsernames.length === 0) {
@@ -1988,8 +1980,14 @@ export async function getJoinRollingWindows() {
   const db = await getDb();
   if (!db) {
     return {
-      last1h: 0, last6h: 0, last24h: 0, today: 0,
-      last1hAll: 0, last6hAll: 0, last24hAll: 0, todayAll: 0,
+      last1h: 0,
+      last6h: 0,
+      last24h: 0,
+      today: 0,
+      last1hAll: 0,
+      last6hAll: 0,
+      last24hAll: 0,
+      todayAll: 0,
     };
   }
   const [rows]: any = await db.execute(sql`
@@ -2049,7 +2047,14 @@ function funnelWindowSql(window: FunnelWindow) {
 export async function getFunnelSnapshot(window: FunnelWindow = "today"): Promise<FunnelSnapshot> {
   const db = await getDb();
   if (!db) {
-    return { window, pageviews: 0, leads: 0, botStarts: 0, approvedJoins: 0, subscribesSent: 0 };
+    return {
+      window,
+      pageviews: 0,
+      leads: 0,
+      botStarts: 0,
+      approvedJoins: 0,
+      subscribesSent: 0,
+    };
   }
   const w = funnelWindowSql(window);
   // One round-trip with subqueries — each filter uses an indexed timestamp
@@ -2109,11 +2114,7 @@ export async function getMetaEventLogsFiltered(input: {
 export async function getMetaEventLogByEventId(eventId: string) {
   const db = await getDb();
   if (!db) return undefined;
-  const rows = await db
-    .select()
-    .from(metaEventLogs)
-    .where(eq(metaEventLogs.eventId, eventId))
-    .limit(1);
+  const rows = await db.select().from(metaEventLogs).where(eq(metaEventLogs.eventId, eventId)).limit(1);
   return rows[0];
 }
 

@@ -18,7 +18,7 @@ describe("Meta browser pixel + server CAPI dual-send wiring", () => {
     expect(clientHtml).toContain('var _misterbPixelId = "%VITE_META_PIXEL_ID%"');
     expect(clientHtml).toContain("fbq('init', _misterbPixelId)");
     expect(clientHtml).toContain("fbq('track', 'PageView', {}, { eventID: _pvEventId })");
-    expect(clientHtml).toContain('window.__misterbPageViewEventId = _pvEventId');
+    expect(clientHtml).toContain("window.__misterbPageViewEventId = _pvEventId");
     expect(clientHtml).toContain('sessionStorage.setItem("misterb_pv_event_id", _pvEventId)');
     expect(clientHtml).toContain("facebook.com/tr?id=%VITE_META_PIXEL_ID%");
   });
@@ -26,7 +26,7 @@ describe("Meta browser pixel + server CAPI dual-send wiring", () => {
   it("ensures _fbp cookie is created early so the very first server PageView captures it", () => {
     expect(clientHtml).toContain('document.cookie = "_fbp=" + _fbpValue');
     expect(trackingSource).toContain('getCookie("_fbp")');
-    expect(trackingSource).toContain('fbp: getFbpValue()');
+    expect(trackingSource).toContain("fbp: getFbpValue()");
   });
 
   it("server CAPI module reads pixel id and access token from env", () => {
@@ -37,7 +37,7 @@ describe("Meta browser pixel + server CAPI dual-send wiring", () => {
 
   it("client posts pageview with the bootstrapped event id so server CAPI ↔ browser pixel dedupe", () => {
     expect(trackingSource).toContain('const stored = sessionStorage.getItem("misterb_pv_event_id")');
-    expect(trackingSource).toContain('const bootstrappedPageViewEventId = getBootstrappedPageViewEventId()');
+    expect(trackingSource).toContain("const bootstrappedPageViewEventId = getBootstrappedPageViewEventId()");
     expect(trackingSource).toContain('const pageViewEventId = bootstrappedPageViewEventId || randomId("pv")');
   });
 
@@ -47,9 +47,7 @@ describe("Meta browser pixel + server CAPI dual-send wiring", () => {
     expect(subscribeSource).toContain("fb.1.${originalClickTimestamp}.${fbclid}");
     // Subscribe must not stamp fbc with Date.now() — that would lie about the
     // ad click time and tank Meta attribution.
-    const fbcLines = subscribeSource
-      .split("\n")
-      .filter((line) => line.includes("fbc") && line.includes("Date.now()"));
+    const fbcLines = subscribeSource.split("\n").filter((line) => line.includes("fbc") && line.includes("Date.now()"));
     expect(fbcLines).toHaveLength(0);
   });
 
@@ -57,7 +55,7 @@ describe("Meta browser pixel + server CAPI dual-send wiring", () => {
     // Cross-event identity: PageView and Subscribe must share external_id so
     // Meta connects the two events to the same person.
     expect(subscribeSource).toContain("data.visitorId || String(data.telegramUserId)");
-    expect(subscribeSource).toContain('hashValue(externalIdSource)');
+    expect(subscribeSource).toContain("hashValue(externalIdSource)");
     expect(subscribeSource).toContain("telegram_user_id: String(data.telegramUserId)");
   });
 
@@ -76,7 +74,7 @@ describe("Meta browser pixel + server CAPI dual-send wiring", () => {
     expect(webhookSource).toContain("buildWhatsAppRedirectUrl");
     expect(waGoSource).toContain('eventScope: "whatsapp_subscribe"');
     expect(waGoSource).toContain('eventType: "Subscribe"');
-    expect(waGoSource).toContain("fireSubscribeEvent");
+    expect(waGoSource).toContain("postMetaPayload");
     expect(waGoSource).toContain("crypto.randomUUID()");
     expect(waGoSource).not.toContain("repeat_click_no_lead");
   });
@@ -98,16 +96,16 @@ describe("Meta browser pixel + server CAPI dual-send wiring", () => {
     // to do), but the post-processing 200 is what guards real updates.
     const processIndex = webhookSource.indexOf("await processTelegramUpdate");
     expect(processIndex).toBeGreaterThan(0);
-    const okAfterProcess = webhookSource.indexOf('res.json({ ok: true })', processIndex);
+    const okAfterProcess = webhookSource.indexOf("res.json({ ok: true })", processIndex);
     expect(okAfterProcess).toBeGreaterThan(processIndex);
     expect(webhookSource).toContain("processing_failed_will_retry");
-    expect(webhookSource).toContain('res.status(500)');
+    expect(webhookSource).toContain("res.status(500)");
     expect(webhookSource).toContain("deleteTelegramUpdateId");
   });
 
   it("loads Microsoft Clarity directly from the landing HTML entry", () => {
-    expect(clientHtml).toContain('https://www.clarity.ms/tag/' + '" + i');
+    expect(clientHtml).toContain("https://www.clarity.ms/tag/" + '" + i');
     expect(clientHtml).toContain('})(window, document, "clarity", "script", "wgvif26xqx")');
-    expect(clientHtml).toContain('c[a].q = c[a].q || []');
+    expect(clientHtml).toContain("c[a].q = c[a].q || []");
   });
 });

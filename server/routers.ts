@@ -3,11 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
-import {
-  buildDashboardToken,
-  isDashboardTokenValid,
-  verifyDashboardPassword,
-} from "./_core/dashboardAuth";
+import { buildDashboardToken, isDashboardTokenValid, verifyDashboardPassword } from "./_core/dashboardAuth";
 import { log } from "./_core/logger";
 import { checkRateLimit, getClientIp, recordSuccess } from "./_core/rateLimit";
 import { systemRouter } from "./_core/systemRouter";
@@ -55,27 +51,15 @@ import {
   upsertSetting,
   clearCachedPersonalInviteLinksForUnjoined,
 } from "./db";
-import { sendPageView } from "./facebookCapi";
-import { buildServerFbc, retryStoredMetaRequest } from "./metaCapi";
+import { buildCapiEventPayload } from "./facebookCapi";
+import { buildServerFbc, postMetaPayload, retryStoredMetaRequest } from "./metaCapi";
 import { getUtmSessionByToken, getSetting } from "./db";
 import { syncTelegramGroupUrlContent, TELEGRAM_GROUP_URL_SETTING_KEY, validateTelegramGroupUrl } from "./telegramGroupLink";
-import {
-  getTelegramChannelId,
-  TELEGRAM_CHANNEL_ID_SETTING_KEY,
-  validateTelegramChannelId,
-} from "./telegramChannel";
-import {
-  TELEGRAM_REMINDER_DELAY_BOUNDS,
-  TELEGRAM_REMINDER_STEPS,
-  isValidReminderDelayMinutes,
-} from "./telegramReminders";
+import { getTelegramChannelId, TELEGRAM_CHANNEL_ID_SETTING_KEY, validateTelegramChannelId } from "./telegramChannel";
+import { TELEGRAM_REMINDER_DELAY_BOUNDS, TELEGRAM_REMINDER_STEPS, isValidReminderDelayMinutes } from "./telegramReminders";
 import { buildDefaultWelcomeMessage } from "./telegramWebhook";
 import { getTelegramGroupUrl } from "./telegramGroupLink";
-import {
-  WHATSAPP_CHANNEL_URL_SETTING_KEY,
-  resetWhatsAppChannelUrlCache,
-  validateChannelUrl,
-} from "./whatsappChannel";
+import { WHATSAPP_CHANNEL_URL_SETTING_KEY, resetWhatsAppChannelUrlCache, validateChannelUrl } from "./whatsappChannel";
 
 const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || "Prestigeofficiel_bot";
 
@@ -106,7 +90,11 @@ function getHeaderString(value: string | string[] | undefined, fallback = "") {
 }
 
 const TRACKING_BUDGET = { limit: 120, windowMs: 60_000 } as const;
-const LOGIN_BUDGET = { limit: 5, windowMs: 15 * 60_000, blockMs: 30 * 60_000 } as const;
+const LOGIN_BUDGET = {
+  limit: 5,
+  windowMs: 15 * 60_000,
+  blockMs: 30 * 60_000,
+} as const;
 
 function isAllowedTrackingOrigin(origin: string, host: string) {
   if (!origin) return true; // many privacy-respecting browsers strip Origin on same-origin POST
@@ -129,10 +117,7 @@ const WELCOME_MESSAGE_SETTING_KEY = "welcome_message";
 const REMINDER_MESSAGE_SETTING_KEYS = TELEGRAM_REMINDER_STEPS.map((step) => step.settingKey);
 const REMINDER_DELAY_SETTING_KEYS = TELEGRAM_REMINDER_STEPS.map((step) => step.delaySettingKey);
 
-const TELEGRAM_MESSAGE_SETTING_KEYS = new Set<string>([
-  WELCOME_MESSAGE_SETTING_KEY,
-  ...REMINDER_MESSAGE_SETTING_KEYS,
-]);
+const TELEGRAM_MESSAGE_SETTING_KEYS = new Set<string>([WELCOME_MESSAGE_SETTING_KEY, ...REMINDER_MESSAGE_SETTING_KEYS]);
 const TELEGRAM_DELAY_SETTING_KEYS = new Set<string>(REMINDER_DELAY_SETTING_KEYS);
 
 const TELEGRAM_SETTING_ALLOWLIST = new Set<string>([
@@ -184,11 +169,17 @@ export const appRouter = router({
         const origin = getHeaderString(ctx.req.headers.origin);
         const host = getHeaderString(ctx.req.headers.host);
         if (!isAllowedTrackingOrigin(origin, host)) {
-          throw new TRPCError({ code: "FORBIDDEN", message: "Cross-origin tracking is not allowed." });
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Cross-origin tracking is not allowed.",
+          });
         }
         const limit = checkRateLimit(`tracking.createSession:${ip}`, TRACKING_BUDGET);
         if (!limit.allowed) {
-          throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Rate limit exceeded." });
+          throw new TRPCError({
+            code: "TOO_MANY_REQUESTS",
+            message: "Rate limit exceeded.",
+          });
         }
         const sessionToken = randomSessionToken();
         const funnelToken = input.funnelToken || randomSessionToken();
@@ -196,9 +187,7 @@ export const appRouter = router({
         const telegramBotUrl = `https://t.me/${BOT_USERNAME}?start=${payload}`;
         const userAgent = getHeaderString(ctx.req.headers["user-agent"]);
         const forwardedFor = getHeaderString(ctx.req.headers["x-forwarded-for"]);
-        const clientIpAddress = forwardedFor
-          ? forwardedFor.split(",")[0]?.trim() || ""
-          : ctx.req.socket.remoteAddress || "";
+        const clientIpAddress = forwardedFor ? forwardedFor.split(",")[0]?.trim() || "" : ctx.req.socket.remoteAddress || "";
 
         await insertUtmSession({
           sessionToken,
@@ -240,11 +229,17 @@ export const appRouter = router({
         const origin = getHeaderString(ctx.req.headers.origin);
         const host = getHeaderString(ctx.req.headers.host);
         if (!isAllowedTrackingOrigin(origin, host)) {
-          throw new TRPCError({ code: "FORBIDDEN", message: "Cross-origin tracking is not allowed." });
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Cross-origin tracking is not allowed.",
+          });
         }
         const limit = checkRateLimit(`tracking.markTelegramClick:${ip}`, TRACKING_BUDGET);
         if (!limit.allowed) {
-          throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Rate limit exceeded." });
+          throw new TRPCError({
+            code: "TOO_MANY_REQUESTS",
+            message: "Rate limit exceeded.",
+          });
         }
         await markSessionClicked(input.sessionToken);
         await recordEvent({
@@ -280,11 +275,17 @@ export const appRouter = router({
         const origin = getHeaderString(ctx.req.headers.origin);
         const host = getHeaderString(ctx.req.headers.host);
         if (!isAllowedTrackingOrigin(origin, host)) {
-          throw new TRPCError({ code: "FORBIDDEN", message: "Cross-origin tracking is not allowed." });
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Cross-origin tracking is not allowed.",
+          });
         }
         const limit = checkRateLimit(`tracking.record:${ip}`, TRACKING_BUDGET);
         if (!limit.allowed) {
-          throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Rate limit exceeded." });
+          throw new TRPCError({
+            code: "TOO_MANY_REQUESTS",
+            message: "Rate limit exceeded.",
+          });
         }
         // The Telegram-group CTA click is no longer the conversion. The Lead
         // now fires server-side on the WhatsApp /wa-go redirect (eventScope=
@@ -299,9 +300,7 @@ export const appRouter = router({
         const userAgent = getHeaderString(ctx.req.headers["user-agent"]);
         const referrer = getHeaderString(ctx.req.headers.referer);
         const forwardedFor = getHeaderString(ctx.req.headers["x-forwarded-for"]);
-        const clientIpAddress = forwardedFor
-          ? forwardedFor.split(",")[0]?.trim() || ""
-          : ctx.req.socket.remoteAddress || "";
+        const clientIpAddress = forwardedFor ? forwardedFor.split(",")[0]?.trim() || "" : ctx.req.socket.remoteAddress || "";
         const sourceUrl = input.sourceUrl || referrer;
 
         await recordEvent({
@@ -346,7 +345,11 @@ export const appRouter = router({
           // client failed to provide one, mint a deterministic one so the same
           // ID is used in both the log row and the Meta call.
           const pageViewEventId = input.eventId || `pv_${randomSessionToken()}`;
-          const capiPayloadWithId = { ...capiPayload, eventId: pageViewEventId };
+          const capiPayloadWithId = {
+            ...capiPayload,
+            eventId: pageViewEventId,
+          };
+          const pageViewRequest = buildCapiEventPayload("PageView", capiPayloadWithId);
 
           // STEP 1: write the log row first with status='queued' so a crash
           // between log + send leaves a recoverable trail (the worker will
@@ -357,14 +360,14 @@ export const appRouter = router({
             eventId: pageViewEventId,
             funnelToken: input.funnelToken || null,
             sessionToken: input.sessionToken || null,
-            requestPayloadJson: JSON.stringify(capiPayloadWithId),
+            requestPayloadJson: JSON.stringify(pageViewRequest.body),
             status: "queued",
             retryable: 0,
             attemptCount: 0,
           });
 
           // STEP 2: actually call Meta.
-          const pageViewResult = (await sendPageView(capiPayloadWithId)) as any;
+          const pageViewResult = await postMetaPayload(pageViewEventId, pageViewRequest.body);
           const status = pageViewResult.success
             ? ("sent" as const)
             : pageViewResult.retryable
@@ -375,10 +378,8 @@ export const appRouter = router({
           await updateMetaEventLog(pageViewEventId, {
             requestPayloadJson: pageViewResult.requestBody
               ? JSON.stringify(pageViewResult.requestBody)
-              : JSON.stringify(capiPayloadWithId),
-            responsePayloadJson: pageViewResult.responseBody
-              ? JSON.stringify(pageViewResult.responseBody)
-              : null,
+              : JSON.stringify(pageViewRequest.body),
+            responsePayloadJson: pageViewResult.responseBody ? JSON.stringify(pageViewResult.responseBody) : null,
             httpStatus: pageViewResult.httpStatus ?? null,
             status,
             errorCode: pageViewResult.errorCode ?? null,
@@ -408,7 +409,10 @@ export const appRouter = router({
         const limit = checkRateLimit(limitKey, LOGIN_BUDGET);
 
         if (!limit.allowed) {
-          log.warn("dashboard.login", "rate_limited", { ip, retryAfterMs: limit.retryAfterMs });
+          log.warn("dashboard.login", "rate_limited", {
+            ip,
+            retryAfterMs: limit.retryAfterMs,
+          });
           const retryAfterSeconds = Math.ceil(limit.retryAfterMs / 1000);
           return {
             success: false,
@@ -468,10 +472,7 @@ export const appRouter = router({
         }
 
         if (input.mode === "range" || input.preset === "custom" || input.startDate || input.endDate) {
-          return (
-            (await getDashboardStats(input.startDate, input.endDate, input.preset || "custom")) ||
-            ({ error: "No data" } as const)
-          );
+          return (await getDashboardStats(input.startDate, input.endDate, input.preset || "custom")) || ({ error: "No data" } as const);
         }
 
         return (await getLiveStatsSinceMidnight()) || ({ error: "No data" } as const);
@@ -481,27 +482,18 @@ export const appRouter = router({
         return { error: "Unauthorized" } as const;
       }
 
-      const [
-        joinStats,
-        joinsByCampaign,
-        botStartStats,
-        botStartsByCampaign,
-        joins,
-        dailyReport,
-        weeklyJoins,
-        rollingJoins,
-        decisionStats,
-      ] = await Promise.all([
-        getJoinStats(),
-        getJoinsByCampaign(),
-        getBotStartStats(),
-        getBotStartsByCampaign(),
-        getAllJoins(100),
-        getDailyReportStats(),
-        getWeeklyJoins(),
-        getJoinRollingWindows(),
-        getJoinRequestDecisionStats(),
-      ]);
+      const [joinStats, joinsByCampaign, botStartStats, botStartsByCampaign, joins, dailyReport, weeklyJoins, rollingJoins, decisionStats] =
+        await Promise.all([
+          getJoinStats(),
+          getJoinsByCampaign(),
+          getBotStartStats(),
+          getBotStartsByCampaign(),
+          getAllJoins(100),
+          getDailyReportStats(),
+          getWeeklyJoins(),
+          getJoinRollingWindows(),
+          getJoinRequestDecisionStats(),
+        ]);
 
       return {
         joinStats,
@@ -603,10 +595,7 @@ export const appRouter = router({
         }
         const META_MAX_ATTEMPTS = 15;
         const nextAttempt = (candidate.attemptCount || 0) + 1;
-        const result = await retryStoredMetaRequest(
-          candidate.eventId,
-          candidate.requestPayloadJson,
-        );
+        const result = await retryStoredMetaRequest(candidate.eventId, candidate.requestPayloadJson);
         const status: "sent" | "failed" | "retrying" | "abandoned" = result.success
           ? "sent"
           : result.retryable
@@ -617,9 +606,7 @@ export const appRouter = router({
 
         await updateMetaEventLog(candidate.eventId, {
           status,
-          requestPayloadJson: result.requestBody
-            ? JSON.stringify(result.requestBody)
-            : candidate.requestPayloadJson,
+          requestPayloadJson: result.requestBody ? JSON.stringify(result.requestBody) : candidate.requestPayloadJson,
           responsePayloadJson: result.responseBody ? JSON.stringify(result.responseBody) : null,
           httpStatus: result.httpStatus ?? null,
           errorCode: result.errorCode ?? null,
@@ -632,10 +619,7 @@ export const appRouter = router({
           nextRetryAt: status === "retrying" ? new Date(Date.now() + 5 * 60 * 1000) : null,
         });
 
-        if (
-          candidate.telegramUserId &&
-          (candidate.eventScope === "telegram_start" || candidate.eventScope === "telegram_join")
-        ) {
+        if (candidate.telegramUserId && (candidate.eventScope === "telegram_start" || candidate.eventScope === "telegram_join")) {
           await updateBotStartMetaStatus(candidate.telegramUserId, status, result.eventId);
         }
         if (candidate.eventScope === "telegram_join") {
@@ -662,10 +646,7 @@ export const appRouter = router({
 
       const pixelId = process.env.META_PIXEL_ID ?? "";
       const accessToken = process.env.META_CONVERSIONS_TOKEN ?? "";
-      const [summary, activity] = await Promise.all([
-        getMetaEventSummary(),
-        getRecentMetaActivityWindow(),
-      ]);
+      const [summary, activity] = await Promise.all([getMetaEventSummary(), getRecentMetaActivityWindow()]);
 
       const credentialsReady = Boolean(pixelId && accessToken);
 
@@ -729,13 +710,7 @@ export const appRouter = router({
         for (const candidate of retryCandidates) {
           const nextAttempt = (candidate.attemptCount || 0) + 1;
           const result = await retryStoredMetaRequest(candidate.eventId, candidate.requestPayloadJson);
-          const status = result.success
-            ? "sent"
-            : result.retryable
-              ? nextAttempt >= 5
-                ? "abandoned"
-                : "retrying"
-              : "failed";
+          const status = result.success ? "sent" : result.retryable ? (nextAttempt >= 5 ? "abandoned" : "retrying") : "failed";
 
           if (status === "sent") sent += 1;
           else if (status === "abandoned") abandoned += 1;
@@ -756,10 +731,7 @@ export const appRouter = router({
             nextRetryAt: status === "retrying" ? new Date(Date.now() + 5 * 60 * 1000) : null,
           });
 
-          if (
-            candidate.telegramUserId &&
-            (candidate.eventScope === "telegram_start" || candidate.eventScope === "telegram_join")
-          ) {
+          if (candidate.telegramUserId && (candidate.eventScope === "telegram_start" || candidate.eventScope === "telegram_join")) {
             await updateBotStartMetaStatus(candidate.telegramUserId, status, result.eventId);
           }
 
@@ -792,7 +764,9 @@ export const appRouter = router({
         // text rendered into Telegram messages, so we don't want arbitrary
         // keys to bloat the table or be set by a stolen dashboard token.
         if (!TELEGRAM_SETTING_ALLOWLIST.has(input.key)) {
-          log.warn("dashboard.updateSetting", "rejected_unknown_key", { key: input.key });
+          log.warn("dashboard.updateSetting", "rejected_unknown_key", {
+            key: input.key,
+          });
           return { success: false, error: "Unknown setting key." } as const;
         }
 
@@ -848,7 +822,10 @@ export const appRouter = router({
         if (TELEGRAM_MESSAGE_SETTING_KEYS.has(input.key)) {
           const trimmed = input.value.trim();
           if (!trimmed) {
-            return { success: false, error: "Message must not be empty." } as const;
+            return {
+              success: false,
+              error: "Message must not be empty.",
+            } as const;
           }
           if (trimmed.length > TELEGRAM_MESSAGE_MAX_LENGTH) {
             return {
@@ -880,22 +857,13 @@ export const appRouter = router({
         return { error: "Unauthorized" } as const;
       }
 
-      const [groupUrl, channelId] = await Promise.all([
-        getTelegramGroupUrl(),
-        getTelegramChannelId(),
-      ]);
+      const [groupUrl, channelId] = await Promise.all([getTelegramGroupUrl(), getTelegramChannelId()]);
       const [welcomeStored, ...reminderEntries] = await Promise.all([
         getSetting(WELCOME_MESSAGE_SETTING_KEY),
         ...TELEGRAM_REMINDER_STEPS.map(async (step) => {
-          const [storedTemplate, storedDelay] = await Promise.all([
-            getSetting(step.settingKey),
-            getSetting(step.delaySettingKey),
-          ]);
+          const [storedTemplate, storedDelay] = await Promise.all([getSetting(step.settingKey), getSetting(step.delaySettingKey)]);
           const delayMinNum = Number(storedDelay);
-          const delayMin =
-            storedDelay && isValidReminderDelayMinutes(delayMinNum)
-              ? Math.floor(delayMinNum)
-              : step.defaultDelayMin;
+          const delayMin = storedDelay && isValidReminderDelayMinutes(delayMinNum) ? Math.floor(delayMinNum) : step.defaultDelayMin;
           return {
             key: step.key,
             label: step.label,
@@ -962,51 +930,63 @@ export const appRouter = router({
         return { error: "Unauthorized" } as const;
       }
       const count = await countBroadcastRecipients();
-      return { count, messageMaxLength: BROADCAST_MESSAGE_MAX_LENGTH } as const;
+      return {
+        count,
+        messageMaxLength: BROADCAST_MESSAGE_MAX_LENGTH,
+      } as const;
     }),
 
-    broadcastSend: publicProcedure
-      .input(z.object({ token: z.string().min(1), message: z.string() }))
-      .mutation(async ({ input }) => {
-        if (!isDashboardTokenValid(input.token)) {
-          return { success: false, error: "Unauthorized" } as const;
-        }
-        const trimmed = input.message.trim();
-        if (!trimmed) {
-          return { success: false, error: "Message must not be empty." } as const;
-        }
-        if (trimmed.length > BROADCAST_MESSAGE_MAX_LENGTH) {
-          return {
-            success: false,
-            error: `Message too long (max ${BROADCAST_MESSAGE_MAX_LENGTH} characters).`,
-          } as const;
-        }
+    broadcastSend: publicProcedure.input(z.object({ token: z.string().min(1), message: z.string() })).mutation(async ({ input }) => {
+      if (!isDashboardTokenValid(input.token)) {
+        return { success: false, error: "Unauthorized" } as const;
+      }
+      const trimmed = input.message.trim();
+      if (!trimmed) {
+        return {
+          success: false,
+          error: "Message must not be empty.",
+        } as const;
+      }
+      if (trimmed.length > BROADCAST_MESSAGE_MAX_LENGTH) {
+        return {
+          success: false,
+          error: `Message too long (max ${BROADCAST_MESSAGE_MAX_LENGTH} characters).`,
+        } as const;
+      }
 
-        const recipients = await getBroadcastRecipients();
-        if (recipients.length === 0) {
-          return { success: false, error: "No eligible recipients." } as const;
-        }
+      const recipients = await getBroadcastRecipients();
+      if (recipients.length === 0) {
+        return { success: false, error: "No eligible recipients." } as const;
+      }
 
-        const jobId = await createBroadcastJob({
-          messageText: trimmed,
-          totalRecipients: recipients.length,
-          createdBy: "dashboard",
-        });
-        if (!jobId) {
-          return { success: false, error: "Could not create broadcast job." } as const;
-        }
-        await enqueueBroadcastDeliveries(jobId, recipients);
+      const jobId = await createBroadcastJob({
+        messageText: trimmed,
+        totalRecipients: recipients.length,
+        createdBy: "dashboard",
+      });
+      if (!jobId) {
+        return {
+          success: false,
+          error: "Could not create broadcast job.",
+        } as const;
+      }
+      await enqueueBroadcastDeliveries(jobId, recipients);
 
-        log.info("dashboard.broadcastSend", "broadcast_queued", {
-          jobId,
-          recipients: recipients.length,
-        });
+      log.info("dashboard.broadcastSend", "broadcast_queued", {
+        jobId,
+        recipients: recipients.length,
+      });
 
-        return { success: true, jobId, recipients: recipients.length } as const;
-      }),
+      return { success: true, jobId, recipients: recipients.length } as const;
+    }),
 
     broadcastStatus: publicProcedure
-      .input(z.object({ token: z.string().min(1), jobId: z.number().int().positive() }))
+      .input(
+        z.object({
+          token: z.string().min(1),
+          jobId: z.number().int().positive(),
+        }),
+      )
       .query(async ({ input }) => {
         if (!isDashboardTokenValid(input.token)) {
           return { error: "Unauthorized" } as const;

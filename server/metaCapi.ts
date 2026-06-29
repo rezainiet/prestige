@@ -43,12 +43,7 @@ export type MetaSendResult = {
   retryable: boolean;
 };
 
-export function isRetryableMetaFailure(result: {
-  httpStatus?: number;
-  errorCode?: string;
-  errorSubcode?: string;
-  errorMessage?: string;
-}) {
+export function isRetryableMetaFailure(result: { httpStatus?: number; errorCode?: string; errorSubcode?: string; errorMessage?: string }) {
   if (!result.errorMessage && !result.httpStatus && !result.errorCode) {
     return false;
   }
@@ -71,10 +66,7 @@ export function isRetryableMetaFailure(result: {
   return message.includes("tempor") || message.includes("timeout") || message.includes("rate limit");
 }
 
-export async function postMetaPayload(
-  eventId: string,
-  payload: Record<string, unknown>,
-): Promise<MetaSendResult> {
+export async function postMetaPayload(eventId: string, payload: Record<string, unknown>): Promise<MetaSendResult> {
   if (!PIXEL_ID || !ACCESS_TOKEN) {
     return {
       success: false,
@@ -90,10 +82,7 @@ export async function postMetaPayload(
   // Clone before mutating so the caller's object — and any payload we may
   // later persist for retries — never sees the env-injected test_event_code.
   const envTestCode = process.env.META_TEST_EVENT_CODE;
-  const requestPayload =
-    envTestCode && !payload.test_event_code
-      ? { ...payload, test_event_code: envTestCode }
-      : payload;
+  const requestPayload = envTestCode && !payload.test_event_code ? { ...payload, test_event_code: envTestCode } : payload;
 
   try {
     const response = await fetch(`${CAPI_URL}?access_token=${ACCESS_TOKEN}`, {
@@ -102,34 +91,36 @@ export async function postMetaPayload(
       body: JSON.stringify(requestPayload),
     });
 
-    const body = (await response.json().catch(() => null)) as
-      | {
-          events_received?: number;
-          messages?: string[];
-          fbtrace_id?: string;
-          error?: {
-            message?: string;
-            code?: number | string;
-            error_subcode?: number | string;
-            type?: string;
-          };
-        }
-      | null;
+    const body = (await response.json().catch(() => null)) as {
+      events_received?: number;
+      messages?: string[];
+      fbtrace_id?: string;
+      error?: {
+        message?: string;
+        code?: number | string;
+        error_subcode?: number | string;
+        type?: string;
+      };
+    } | null;
 
-    const errorMessage = body?.error?.message || (!response.ok ? `HTTP ${response.status}` : undefined);
-    const errorCode = normalizeErrorCode(body?.error?.code);
+    const zeroEventsReceived = response.ok && !body?.error && body?.events_received === 0;
+    const errorMessage =
+      body?.error?.message ||
+      (!response.ok ? `HTTP ${response.status}` : zeroEventsReceived ? "Meta returned success but accepted zero events" : undefined);
+    const errorCode = zeroEventsReceived ? "zero_events_received" : normalizeErrorCode(body?.error?.code);
     const errorSubcode = normalizeErrorCode(body?.error?.error_subcode);
-    const retryable = !response.ok || body?.error
-      ? isRetryableMetaFailure({
-          httpStatus: response.status,
-          errorCode,
-          errorSubcode,
-          errorMessage,
-        })
-      : false;
+    const retryable =
+      !response.ok || body?.error
+        ? isRetryableMetaFailure({
+            httpStatus: response.status,
+            errorCode,
+            errorSubcode,
+            errorMessage,
+          })
+        : false;
 
     return {
-      success: Boolean(response.ok && !body?.error),
+      success: Boolean(response.ok && !body?.error && !zeroEventsReceived),
       eventId,
       httpStatus: response.status,
       responseBody: body,

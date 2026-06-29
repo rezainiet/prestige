@@ -15,23 +15,39 @@ vi.mock("./db", () => ({
 }));
 
 vi.mock("./facebookCapi", () => ({
+  buildCapiEventPayload: vi.fn((_eventName, payload) => ({
+    eventId: payload.eventId,
+    body: {
+      data: [
+        {
+          event_name: "PageView",
+          event_id: payload.eventId,
+          event_source_url: payload.eventSourceUrl,
+          user_data: { external_id_source: payload.visitorId },
+          custom_data: { source: payload.source },
+        },
+      ],
+    },
+  })),
   sendPageView: vi.fn(),
   sendSubscribe: vi.fn(),
   sendContact: vi.fn(),
   sendScrollDepth: vi.fn(),
 }));
 
+vi.mock("./metaCapi", () => ({
+  buildServerFbc: vi.fn(),
+  postMetaPayload: vi.fn(),
+  retryStoredMetaRequest: vi.fn(),
+}));
+
 process.env.JWT_SECRET = process.env.JWT_SECRET || "test-secret-for-vitest-1234567890";
 process.env.DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || "1234";
 
 import { appRouter } from "./routers";
-import {
-  getDashboardStats,
-  getDashboardStatsByPreset,
-  getLiveStatsSinceMidnight,
-  recordEvent,
-} from "./db";
+import { getDashboardStats, getDashboardStatsByPreset, getLiveStatsSinceMidnight, recordEvent } from "./db";
 import { sendContact, sendPageView, sendScrollDepth, sendSubscribe } from "./facebookCapi";
+import { postMetaPayload } from "./metaCapi";
 import { buildDashboardToken } from "./_core/dashboardAuth";
 
 const VALID_TOKEN = buildDashboardToken();
@@ -304,7 +320,7 @@ describe("Mister B dashboard and tracking routers", () => {
   });
 
   it("records pageviews and forwards them to Meta CAPI PageView", async () => {
-    vi.mocked(sendPageView).mockResolvedValue({
+    vi.mocked(postMetaPayload).mockResolvedValue({
       success: true,
       eventId: "pv_456",
       httpStatus: 200,
@@ -320,12 +336,15 @@ describe("Mister B dashboard and tracking routers", () => {
       sourceUrl: "https://mister-b.test/",
     });
 
-    expect(sendPageView).toHaveBeenCalledWith(
+    expect(postMetaPayload).toHaveBeenCalledWith(
+      "pv_456",
       expect.objectContaining({
-        visitorId: "visitor_456",
-        eventId: "pv_456",
-        eventSourceUrl: "https://mister-b.test/",
-        source: "landing",
+        data: expect.arrayContaining([
+          expect.objectContaining({
+            event_id: "pv_456",
+            event_source_url: "https://mister-b.test/",
+          }),
+        ]),
       }),
     );
   });
@@ -334,26 +353,33 @@ describe("Mister B dashboard and tracking routers", () => {
     const caller = appRouter.createCaller(createContext());
 
     let releaseSendPageView: (() => void) | null = null;
-    const sendPageViewDone = new Promise<Awaited<ReturnType<typeof sendPageView>>>((resolve) => {
+    const sendPageViewDone = new Promise<Awaited<ReturnType<typeof postMetaPayload>>>((resolve) => {
       releaseSendPageView = () =>
-        resolve({ success: true, eventId: "pv_await", httpStatus: 200, retryable: false });
+        resolve({
+          success: true,
+          eventId: "pv_await",
+          httpStatus: 200,
+          retryable: false,
+        });
     });
 
-    vi.mocked(sendPageView).mockImplementation(() => sendPageViewDone as ReturnType<typeof sendPageView>);
+    vi.mocked(postMetaPayload).mockImplementation(() => sendPageViewDone as ReturnType<typeof postMetaPayload>);
 
     let mutationResolved = false;
-    const recordPromise = caller.tracking.record({
-      eventType: "pageview",
-      eventSource: "landing",
-      visitorId: "visitor_await",
-      eventId: "pv_await",
-      sourceUrl: "https://mister-b.test/",
-    }).then(() => {
-      mutationResolved = true;
-    });
+    const recordPromise = caller.tracking
+      .record({
+        eventType: "pageview",
+        eventSource: "landing",
+        visitorId: "visitor_await",
+        eventId: "pv_await",
+        sourceUrl: "https://mister-b.test/",
+      })
+      .then(() => {
+        mutationResolved = true;
+      });
 
     await vi.waitFor(() => {
-      expect(sendPageView).toHaveBeenCalledTimes(1);
+      expect(postMetaPayload).toHaveBeenCalledTimes(1);
     });
     expect(mutationResolved).toBe(false);
 
