@@ -4,6 +4,7 @@ export type TrackingSession = {
   telegramBotUrl: string;
   telegramDeepLink: string;
   payload: string;
+  attributionKey?: string;
 };
 
 type MetaWindow = Window & {
@@ -132,6 +133,21 @@ function getCurrentUtmParams() {
   };
 }
 
+/**
+ * Identify the acquisition click represented by the current URL. A browser
+ * tab may be reused for a later ad click, so sessionStorage alone is not a
+ * safe signal that the previous campaign still owns this visit.
+ */
+function getCurrentAttributionKey(): string | null {
+  if (typeof window === "undefined") return null;
+  const params = new URLSearchParams(window.location.search);
+  const keys = ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term", "fbclid"];
+  const acquisition = keys
+    .map((key) => [key, params.get(key)?.trim() || ""] as const)
+    .filter(([, value]) => value);
+  return acquisition.length ? JSON.stringify(acquisition) : null;
+}
+
 function getVisitorId() {
   if (typeof window === "undefined") return "";
   let visitorId = window.localStorage.getItem(VISITOR_STORAGE_KEY);
@@ -195,6 +211,7 @@ function normalizeStoredSession(raw: unknown): TrackingSession | null {
     telegramBotUrl: candidate.telegramBotUrl,
     telegramDeepLink: candidate.telegramDeepLink,
     payload: candidate.payload,
+    attributionKey: candidate.attributionKey,
   };
 }
 
@@ -227,6 +244,14 @@ function storeSession(session: TrackingSession) {
   // so an in-flight session created before this deploy continues to resolve
   // for one browser session; new sessions stop polluting old keys.
   window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(session));
+}
+
+function clearStoredSession() {
+  if (typeof window === "undefined") return;
+  window.sessionStorage.removeItem(STORAGE_KEY);
+  for (const legacyKey of LEGACY_STORAGE_KEYS) {
+    window.sessionStorage.removeItem(legacyKey);
+  }
 }
 
 async function postTrackingRecord(input: {
@@ -305,7 +330,11 @@ async function createTrackingSession(): Promise<TrackingSession | null> {
     }>;
     const session = data?.[0]?.result?.data?.json || null;
     if (session) {
-      storeSession({ ...session, funnelToken: session.funnelToken || getOrCreateFunnelToken() });
+      storeSession({
+        ...session,
+        funnelToken: session.funnelToken || getOrCreateFunnelToken(),
+        attributionKey: getCurrentAttributionKey() || undefined,
+      });
     }
     return session;
   } catch {
@@ -315,7 +344,21 @@ async function createTrackingSession(): Promise<TrackingSession | null> {
 
 export async function ensureTrackingSession(): Promise<TrackingSession | null> {
   const existing = readStoredSession();
-  if (existing) return existing;
+  const currentAttributionKey = getCurrentAttributionKey();
+  if (existing) {
+    // No acquisition parameters means an ordinary reload/navigation inside
+    // the same visit. When acquisition parameters are present, only reuse a
+    // session created for that exact click; otherwise create a fresh session
+    // while retaining the stable funnel/visitor identity.
+    if (!currentAttributionKey || existing.attributionKey === currentAttributionKey) {
+      return existing;
+    }
+    // Preserve cross-visit funnel identity even if an old deployment did not
+    // mirror this session's funnel token into localStorage correctly.
+    window.localStorage.setItem(FUNNEL_STORAGE_KEY, existing.funnelToken);
+    setCookie(FUNNEL_COOKIE_KEY, existing.funnelToken);
+    clearStoredSession();
+  }
 
   if (!sessionPromise) {
     sessionPromise = createTrackingSession().finally(() => {

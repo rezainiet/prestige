@@ -147,4 +147,69 @@ describe("tracking session parser", () => {
     expect(markClickPayload[0].json.sessionToken).toBe("session_123");
     expect(markClickPayload[0].json.source).toBe("telegram_group_cta");
   });
+
+  it("creates a fresh session when the same tab arrives through a different campaign", async () => {
+    const sessionStorage = new MemoryStorage();
+    const localStorage = new MemoryStorage();
+    sessionStorage.setItem(
+      "misterb_tracking_session_v4",
+      JSON.stringify({
+        sessionToken: "session_old",
+        funnelToken: "funnel_shared",
+        telegramBotUrl: "https://t.me/Prestigeofficiel_bot?start=old",
+        telegramDeepLink: "tg://resolve?domain=Prestigeofficiel_bot&start=old",
+        payload: "old",
+        attributionKey: JSON.stringify([
+          ["utm_source", "old_source"],
+          ["utm_campaign", "old_campaign"],
+        ]),
+      }),
+    );
+    const fetchMock = vi.fn().mockResolvedValue({
+      json: async () => [
+        {
+          result: {
+            data: {
+              json: {
+                sessionToken: "session_new",
+                funnelToken: "funnel_shared",
+                telegramBotUrl: "https://t.me/Prestigeofficiel_bot?start=new",
+                telegramDeepLink: "tg://resolve?domain=Prestigeofficiel_bot&start=new",
+                payload: "new",
+              },
+            },
+          },
+        },
+      ],
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("window", {
+      sessionStorage,
+      localStorage,
+      location: {
+        href: "https://mister-b.club/?utm_source=new_source&utm_campaign=new_campaign",
+        search: "?utm_source=new_source&utm_campaign=new_campaign",
+      },
+    });
+    vi.stubGlobal("document", {
+      referrer: "https://facebook.com/",
+      cookie: "",
+      visibilityState: "visible",
+      addEventListener: vi.fn(),
+    });
+    Object.defineProperty(globalThis, "navigator", {
+      value: { userAgent: "iPhone" },
+      configurable: true,
+    });
+
+    const tracking = await import("../client/src/lib/tracking");
+    const session = await tracking.ensureTrackingSession();
+
+    expect(session?.sessionToken).toBe("session_new");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const createPayload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(createPayload[0].json.utmSource).toBe("new_source");
+    expect(createPayload[0].json.utmCampaign).toBe("new_campaign");
+    expect(createPayload[0].json.funnelToken).toBe("funnel_shared");
+  });
 });
