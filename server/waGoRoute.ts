@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import crypto from "node:crypto";
 import {
   createMetaEventLog,
   getBotStartByTelegramUserId,
@@ -9,7 +10,7 @@ import {
   updateMetaEventLog,
 } from "./db";
 import { log } from "./_core/logger";
-import { fireWhatsAppLeadEvent } from "./metaCapi";
+import { fireSubscribeEvent } from "./metaCapi";
 import { skipPendingTelegramReminderJobs } from "./telegramReminders";
 import { getWhatsAppChannelUrl } from "./whatsappChannel";
 
@@ -75,22 +76,26 @@ async function processWhatsAppClick(args: {
     country: null,
   });
 
-  // First click only — atomic guard makes this safe under double-clicks and
-  // Telegram in-app prefetching.
-  const isFirstClick = await markBotStartJoinedIfFirst(telegramUserId);
-  if (!isFirstClick) {
-    log.info("waGo", "repeat_click_no_lead", { telegramUserId });
+  // Only bot-issued links may create Meta conversions. Without a bot_start
+  // row, an arbitrary public `?u=` value could fabricate Subscribe events.
+  if (!botStart) {
+    log.warn("waGo", "unknown_telegram_user_skipping_subscribe", { telegramUserId });
     return;
   }
 
-  await skipPendingTelegramReminderJobs(telegramUserId, "joined_group");
+  // First click only marks conversion state and cancels future reminders.
+  // Meta emission below is deliberately not gated: every click subscribes.
+  const isFirstClick = await markBotStartJoinedIfFirst(telegramUserId);
+  if (isFirstClick) {
+    await skipPendingTelegramReminderJobs(telegramUserId, "joined_group");
+  }
 
   const epochSeconds = Math.floor(Date.now() / 1000);
-  const eventId = `wa_click_${telegramUserId}_${epochSeconds}`;
+  const eventId = `wa_sub_${telegramUserId}_${Date.now()}_${crypto.randomUUID()}`;
 
   await createMetaEventLog({
-    eventType: "Lead",
-    eventScope: "whatsapp_click",
+    eventType: "Subscribe",
+    eventScope: "whatsapp_subscribe",
     eventId,
     funnelToken,
     sessionToken,
@@ -101,7 +106,7 @@ async function processWhatsAppClick(args: {
   });
 
   try {
-    const metaResult = await fireWhatsAppLeadEvent({
+    const metaResult = await fireSubscribeEvent({
       eventId,
       eventTime: epochSeconds,
       telegramUserId,
@@ -121,6 +126,7 @@ async function processWhatsAppClick(args: {
       // own IP/UA, which is still a real user signal.
       userAgent: session?.userAgent || args.userAgent || undefined,
       ipAddress: session?.ipAddress || args.ip || undefined,
+      subscribeSource: "whatsapp",
     });
 
     const status = metaResult.success ? "sent" : metaResult.retryable ? "retrying" : "failed";
@@ -140,10 +146,10 @@ async function processWhatsAppClick(args: {
       nextRetryAt: metaResult.retryable ? new Date(Date.now() + META_RETRY_DELAY_MS) : null,
     });
 
-    log.info("waGo", "lead_fired", { telegramUserId, eventId, status });
+    log.info("waGo", "subscribe_fired", { telegramUserId, eventId, status, isFirstClick });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    log.error("waGo", "lead_unexpected_error", { telegramUserId, eventId, error: message });
+    log.error("waGo", "subscribe_unexpected_error", { telegramUserId, eventId, error: message });
     await updateMetaEventLog(eventId, {
       status: "retrying",
       errorCode: "unexpected_error",

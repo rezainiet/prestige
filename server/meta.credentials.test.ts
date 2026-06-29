@@ -7,6 +7,7 @@ const trackingSource = readFileSync(resolve(import.meta.dirname, "../client/src/
 const pageViewSource = readFileSync(resolve(import.meta.dirname, "./facebookCapi.ts"), "utf8");
 const subscribeSource = readFileSync(resolve(import.meta.dirname, "./metaCapi.ts"), "utf8");
 const webhookSource = readFileSync(resolve(import.meta.dirname, "./telegramWebhook.ts"), "utf8");
+const waGoSource = readFileSync(resolve(import.meta.dirname, "./waGoRoute.ts"), "utf8");
 const routersSource = readFileSync(resolve(import.meta.dirname, "./routers.ts"), "utf8");
 
 describe("Meta browser pixel + server CAPI dual-send wiring", () => {
@@ -70,17 +71,14 @@ describe("Meta browser pixel + server CAPI dual-send wiring", () => {
     expect(pageViewSource).toContain("utm_campaign");
   });
 
-  it("Subscribe fires on EVERY /start — attributed AND organic — to maximize Meta optimization signal", () => {
-    expect(webhookSource).toContain("fireSubscribeForStart");
-    expect(webhookSource).toContain('eventScope: "telegram_start"');
-    expect(webhookSource).toContain("tg_start_${args.telegramUserId}");
-    // Idempotency guard: don't re-fire Meta for repeat /starts.
-    expect(webhookSource).toContain('existing?.metaSubscribeStatus === "sent"');
-    // The /start handler must NOT gate on attribution any more — Meta needs
-    // every conversion. The old `if (isAttributed)` skip has been removed.
-    expect(webhookSource).not.toContain("if (isAttributed)");
-    // Cross-path dedupe protects against a bypass-join Subscribe firing first.
-    expect(webhookSource).toContain("hasSentSubscribeForTelegramUser");
+  it("Subscribe fires on every tracked channel click, while /start only delivers the redirect", () => {
+    expect(webhookSource).not.toContain("fireSubscribeForStart");
+    expect(webhookSource).toContain("buildWhatsAppRedirectUrl");
+    expect(waGoSource).toContain('eventScope: "whatsapp_subscribe"');
+    expect(waGoSource).toContain('eventType: "Subscribe"');
+    expect(waGoSource).toContain("fireSubscribeEvent");
+    expect(waGoSource).toContain("crypto.randomUUID()");
+    expect(waGoSource).not.toContain("repeat_click_no_lead");
   });
 
   it("Join flow ALSO fires Subscribe (bypass joins) so Meta sees users who skip /start", () => {

@@ -10,10 +10,10 @@ describe("Dashboard Telegram funnel", () => {
     expect(dbSource).toContain("COALESCE(eventSource, '') NOT LIKE 'telegram_group%'");
   });
 
-  it("renders the clearer Telegram funnel cards and consumes the bot-start overview query", () => {
-    expect(dashboardSource).toContain('title="Clic bot Telegram"');
+  it("renders the channel funnel cards and consumes the bot-start overview query", () => {
+    expect(dashboardSource).toContain('title="Clics lien canal"');
     expect(dashboardSource).toContain('title="Start bot"');
-    expect(dashboardSource).toContain('title="Membres rejoints"');
+    expect(dashboardSource).toContain('title="Abonnés canal"');
     expect(dashboardSource).toContain('title="Contact direct"');
     expect(dashboardSource).toContain("trpc.dashboard.telegramOverview.useQuery");
     expect(dashboardSource).toContain("botToMemberRate");

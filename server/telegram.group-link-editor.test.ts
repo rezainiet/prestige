@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { replaceTelegramGroupUrlInText } from "./telegramGroupLink";
+import { validateChannelUrl } from "./whatsappChannel";
 
 const dashboardSource = fs.readFileSync(
   path.resolve(import.meta.dirname, "../client/src/pages/Dashboard.tsx"),
@@ -10,6 +11,15 @@ const dashboardSource = fs.readFileSync(
 const routerSource = fs.readFileSync(path.resolve(import.meta.dirname, "./routers.ts"), "utf-8");
 
 describe("telegram group link editor", () => {
+  it("accepts WhatsApp and Telegram channels but rejects unrelated hosts", () => {
+    expect(validateChannelUrl("https://whatsapp.com/channel/0029Vb60PxI7YSd5pqwOq82R")).toEqual({
+      ok: true,
+      value: "https://whatsapp.com/channel/0029Vb60PxI7YSd5pqwOq82R",
+    });
+    expect(validateChannelUrl("https://t.me/prestige_channel").ok).toBe(true);
+    expect(validateChannelUrl("https://example.com/channel/nope").ok).toBe(false);
+  });
+
   it("replaces placeholders and legacy Telegram links with the newest group URL", () => {
     const nextUrl = "https://t.me/new_private_group";
 
@@ -28,6 +38,12 @@ describe("telegram group link editor", () => {
         nextUrl,
       ),
     ).toBe(`Old joinchat link ${nextUrl} and ok`);
+    expect(
+      replaceTelegramGroupUrlInText(
+        "Old WhatsApp https://whatsapp.com/channel/0029OldChannel",
+        nextUrl,
+      ),
+    ).toBe(`Old WhatsApp ${nextUrl}`);
   });
 
   it("preserves bot and contact handles that are not invite links", () => {
@@ -46,11 +62,11 @@ describe("telegram group link editor", () => {
     expect(out).not.toContain("https://t.me/+old_invite");
   });
 
-  it("adds a dashboard control and save button for editing the Telegram group link", () => {
-    expect(dashboardSource).toContain("Telegram link editor");
-    expect(dashboardSource).toContain("telegram-group-url");
+  it("adds a dashboard control for editing a WhatsApp or Telegram channel link", () => {
+    expect(dashboardSource).toContain("Channel link editor");
+    expect(dashboardSource).toContain("channel-url");
     expect(dashboardSource).toContain("Save latest changes");
-    expect(dashboardSource).toContain('key: "telegram_group_url"');
+    expect(dashboardSource).toContain('key: "whatsapp_channel_url"');
   });
 
   it("syncs pending bot content immediately when the Telegram group link setting is saved", () => {

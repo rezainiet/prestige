@@ -1520,12 +1520,11 @@ export async function getRecentMetaActivityWindow(windowMs = 60 * 60 * 1000) {
     };
   }
   const since = new Date(Date.now() - windowMs);
-  // Subscribe now fires on /start (eventScope=telegram_start). Legacy
-  // telegram_join is kept as a fallback so historical rows still count.
+  // Include current channel-link clicks plus historical Telegram scopes.
   const [rows]: any = await db.execute(sql`
     SELECT
       MAX(CASE WHEN eventScope = 'pageview' AND status = 'sent' THEN completedAt END) AS pageViewLastSentAt,
-      MAX(CASE WHEN eventScope IN ('telegram_start', 'telegram_join') AND status = 'sent' THEN completedAt END) AS subscribeLastSentAt
+      MAX(CASE WHEN eventScope IN ('whatsapp_subscribe', 'telegram_start', 'telegram_join') AND status = 'sent' THEN completedAt END) AS subscribeLastSentAt
     FROM meta_event_logs
     WHERE completedAt IS NOT NULL AND completedAt >= ${since}
   `);
@@ -1568,7 +1567,7 @@ export async function getMetaEventSummary() {
       COALESCE(SUM(CASE WHEN status IN ('failed', 'abandoned') AND DATE(createdAt) = CURRENT_DATE() THEN 1 ELSE 0 END), 0) AS todayFailed,
       COALESCE(SUM(CASE WHEN status IN ('queued', 'retrying') AND DATE(createdAt) = CURRENT_DATE() THEN 1 ELSE 0 END), 0) AS todayPending
     FROM meta_event_logs
-    WHERE eventScope IN ('telegram_start', 'telegram_join')
+    WHERE eventScope IN ('whatsapp_subscribe', 'telegram_start', 'telegram_join')
   `);
 
   return {
@@ -2062,7 +2061,7 @@ export async function getFunnelSnapshot(window: FunnelWindow = "today"): Promise
       (SELECT COUNT(*) FROM meta_event_logs WHERE eventScope IN ('whatsapp_click','telegram_join_lead') AND status = 'sent' AND COALESCE(completedAt, createdAt) ${w}) AS leads,
       (SELECT COUNT(*) FROM bot_starts WHERE startedAt ${w}) AS botStarts,
       (SELECT COUNT(*) FROM telegram_join_request_audit WHERE decision = 'approved' AND decidedAt ${w}) AS approvedJoins,
-      (SELECT COUNT(*) FROM meta_event_logs WHERE eventScope IN ('telegram_start','telegram_join') AND status = 'sent' AND COALESCE(completedAt, createdAt) ${w}) AS subscribesSent
+      (SELECT COUNT(*) FROM meta_event_logs WHERE eventScope IN ('whatsapp_subscribe','telegram_start','telegram_join') AND status = 'sent' AND COALESCE(completedAt, createdAt) ${w}) AS subscribesSent
   `);
   const r = rows?.[0] || {};
   return {
@@ -2213,7 +2212,7 @@ export async function getActivityFeed(limit = 50): Promise<ActivityFeedEntry[]> 
       NULL AS reason
      FROM meta_event_logs mel
      LEFT JOIN bot_starts bs ON bs.telegramUserId = mel.telegramUserId
-     WHERE mel.eventScope IN ('telegram_start','telegram_join')
+     WHERE mel.eventScope IN ('whatsapp_subscribe','telegram_start','telegram_join')
        AND mel.status = 'sent'
      ORDER BY COALESCE(mel.completedAt, mel.updatedAt, mel.createdAt) DESC
      LIMIT ${cap})

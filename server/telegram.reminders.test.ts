@@ -45,6 +45,7 @@ describe("telegram reminders", () => {
       chatId: "123456",
       firstName: "Yassine",
       startedAt,
+      groupUrlOverride: "https://mister-b.club/wa-go?u=123456",
     });
 
     expect(drafts).toHaveLength(7);
@@ -56,9 +57,9 @@ describe("telegram reminders", () => {
       TELEGRAM_REMINDER_STEPS.map((step) => step.defaultDelayMin * 60 * 1000),
     );
 
-    expect(drafts[0]?.messageText).toContain("groupe privé Prestige");
+    expect(drafts[0]?.messageText).toContain("chaîne WhatsApp Prestige");
     expect(drafts[0]?.messageText).toContain("Yassine");
-    expect(drafts[0]?.messageText).toContain("https://t.me/");
+    expect(drafts[0]?.messageText).toContain("/wa-go?u=123456");
     expect(drafts[0]?.messageText).toContain("@prest_original");
   });
 

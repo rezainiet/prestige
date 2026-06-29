@@ -73,11 +73,13 @@ export async function getTelegramGroupUrl() {
 // the welcome template often contains a contact handle (@MAXIME_SPECIALISTEM)
 // or a bot link (t.me/Misternb_bot) that must survive a group-URL change.
 const TELEGRAM_INVITE_URL_RE = /https?:\/\/(?:t|telegram)\.me\/(?:\+|joinchat\/)[A-Za-z0-9_-]+/gi;
+const WHATSAPP_CHANNEL_URL_RE = /https?:\/\/(?:www\.)?whatsapp\.com\/channel\/[A-Za-z0-9]+/gi;
 
 export function replaceTelegramGroupUrlInText(text: string, nextGroupUrl: string) {
   return text
     .replaceAll("{group_url}", nextGroupUrl)
     .replace(TELEGRAM_INVITE_URL_RE, nextGroupUrl)
+    .replace(WHATSAPP_CHANNEL_URL_RE, nextGroupUrl)
     .trim();
 }
 

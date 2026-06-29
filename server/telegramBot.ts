@@ -22,14 +22,12 @@ export type SendTelegramMessageOptions = {
 };
 
 /**
- * Build the inline keyboard with a single URL button that opens the private
- * group. Used by the welcome, the 7 reminders, and broadcasts so every
- * user-facing bot message exposes a consistent join CTA.
+ * Build the inline keyboard with a single tracked channel CTA.
  */
 export function buildJoinGroupKeyboard(groupUrl: string): TelegramReplyMarkup {
   return {
     inline_keyboard: [
-      [{ text: "🚀 Rejoindre le groupe privé", url: groupUrl }],
+      [{ text: "📲 Rejoindre la chaîne WhatsApp", url: groupUrl }],
     ],
   };
 }

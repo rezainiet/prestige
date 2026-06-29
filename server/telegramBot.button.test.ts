@@ -8,7 +8,7 @@ describe("buildJoinGroupKeyboard", () => {
 
     expect(keyboard).toEqual({
       inline_keyboard: [
-        [{ text: "🚀 Rejoindre le groupe privé", url }],
+        [{ text: "📲 Rejoindre la chaîne WhatsApp", url }],
       ],
     });
   });

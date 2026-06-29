@@ -90,13 +90,6 @@ export function TelegramMessagesEditor({ token }: Props) {
         </div>
       ) : (
         <>
-          <ChannelCard
-            token={token}
-            channelId={data.channelId}
-            settingKey={data.channelIdSettingKey}
-            mutation={updateMutation}
-            onSaved={() => void settingsQuery.refetch()}
-          />
           <WelcomeCard
             token={token}
             entry={data.welcome}

@@ -71,6 +71,11 @@ import {
 } from "./telegramReminders";
 import { buildDefaultWelcomeMessage } from "./telegramWebhook";
 import { getTelegramGroupUrl } from "./telegramGroupLink";
+import {
+  WHATSAPP_CHANNEL_URL_SETTING_KEY,
+  resetWhatsAppChannelUrlCache,
+  validateChannelUrl,
+} from "./whatsappChannel";
 
 const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || "Prestigeofficiel_bot";
 
@@ -131,6 +136,7 @@ const TELEGRAM_MESSAGE_SETTING_KEYS = new Set<string>([
 const TELEGRAM_DELAY_SETTING_KEYS = new Set<string>(REMINDER_DELAY_SETTING_KEYS);
 
 const TELEGRAM_SETTING_ALLOWLIST = new Set<string>([
+  WHATSAPP_CHANNEL_URL_SETTING_KEY,
   TELEGRAM_GROUP_URL_SETTING_KEY,
   TELEGRAM_CHANNEL_ID_SETTING_KEY,
   WELCOME_MESSAGE_SETTING_KEY,
@@ -560,7 +566,7 @@ export const appRouter = router({
           status: z.enum(["all", "queued", "sent", "failed", "retrying", "abandoned"]).optional(),
           eventType: z.enum(["all", "PageView", "Lead", "Subscribe"]).optional(),
           eventScope: z
-            .enum(["all", "pageview", "whatsapp_click", "lead", "telegram_start", "telegram_join", "backfill"])
+            .enum(["all", "pageview", "whatsapp_subscribe", "whatsapp_click", "lead", "telegram_start", "telegram_join", "backfill"])
             .optional(),
           limit: z.number().int().min(1).max(200).optional(),
         }),
@@ -626,7 +632,10 @@ export const appRouter = router({
           nextRetryAt: status === "retrying" ? new Date(Date.now() + 5 * 60 * 1000) : null,
         });
 
-        if (candidate.telegramUserId) {
+        if (
+          candidate.telegramUserId &&
+          (candidate.eventScope === "telegram_start" || candidate.eventScope === "telegram_join")
+        ) {
           await updateBotStartMetaStatus(candidate.telegramUserId, status, result.eventId);
         }
         if (candidate.eventScope === "telegram_join") {
@@ -747,7 +756,10 @@ export const appRouter = router({
             nextRetryAt: status === "retrying" ? new Date(Date.now() + 5 * 60 * 1000) : null,
           });
 
-          if (candidate.telegramUserId) {
+          if (
+            candidate.telegramUserId &&
+            (candidate.eventScope === "telegram_start" || candidate.eventScope === "telegram_join")
+          ) {
             await updateBotStartMetaStatus(candidate.telegramUserId, status, result.eventId);
           }
 
@@ -793,6 +805,22 @@ export const appRouter = router({
             return { success: false, error: validation.error } as const;
           }
           await syncTelegramGroupUrlContent(validation.value);
+          return { success: true } as const;
+        }
+
+        if (input.key === WHATSAPP_CHANNEL_URL_SETTING_KEY) {
+          const validation = validateChannelUrl(input.value);
+          if (!validation.ok) {
+            log.warn("dashboard.updateSetting", "channel_url_rejected", {
+              error: validation.error,
+            });
+            return { success: false, error: validation.error } as const;
+          }
+          await upsertSetting(WHATSAPP_CHANNEL_URL_SETTING_KEY, validation.value);
+          resetWhatsAppChannelUrlCache();
+          log.info("dashboard.updateSetting", "channel_url_updated", {
+            settingKey: WHATSAPP_CHANNEL_URL_SETTING_KEY,
+          });
           return { success: true } as const;
         }
 

@@ -196,6 +196,7 @@ export interface CapiEventData {
   utmContent?: string;
   sourceUrl?: string;
   testEventCode?: string;
+  subscribeSource?: "telegram" | "whatsapp";
 }
 
 export function buildSubscribePayload(data: CapiEventData) {
@@ -222,14 +223,16 @@ export function buildSubscribePayload(data: CapiEventData) {
   const fbc = buildServerFbc(data.fbclid, data.sessionCreatedAt);
   if (fbc) userData.fbc = fbc;
 
+  const isWhatsAppClick = data.subscribeSource === "whatsapp";
   const customData: Record<string, string> = {
-    content_name: "Telegram Channel Join",
-    content_category: "Telegram",
+    content_name: isWhatsAppClick ? "WhatsApp Channel Click" : "Telegram Channel Join",
+    content_category: isWhatsAppClick ? "WhatsApp" : "Telegram",
     value: "0.00",
     currency: "EUR",
     predicted_ltv: "0.00",
     telegram_user_id: String(data.telegramUserId),
   };
+  if (isWhatsAppClick) customData.click_source = "telegram_bot_dm";
 
   if (data.utmCampaign) customData.utm_campaign = data.utmCampaign;
   if (data.utmSource) customData.utm_source = data.utmSource;

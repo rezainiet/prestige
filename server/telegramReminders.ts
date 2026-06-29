@@ -5,12 +5,9 @@ import { log } from "./_core/logger";
 import {
   getDb,
   getSetting,
-  getValidPersonalInviteLink,
-  setBotStartPersonalInviteLink,
 } from "./db";
 import {
   buildJoinGroupKeyboard,
-  createPersonalInviteLink,
   sendTelegramMessage,
 } from "./telegramBot";
 import {
@@ -18,7 +15,7 @@ import {
   getTelegramGroupUrl,
   replaceTelegramGroupUrlInText,
 } from "./telegramGroupLink";
-import { getTelegramChannelId } from "./telegramChannel";
+import { buildWhatsAppRedirectUrl } from "./whatsappChannel";
 
 const WORKER_NAME = "telegram_reminders";
 
@@ -33,27 +30,27 @@ export const TELEGRAM_REMINDER_STEPS = [
     settingKey: "telegram_reminder_15m_message",
     delaySettingKey: "telegram_reminder_15m_delay_min",
     label: "Reminder 1 (15 min)",
-    description: "First reminder if not joined.",
+    description: "First reminder if the channel link was not clicked.",
     defaultDelayMin: 15,
-    defaultTemplate: "Hey {firstName} 👋 Je viens de remarquer que tu n’avais pas encore rejoint le groupe privé Prestige 🌐 Tu vas adorer ce qu’on partage là-bas — ton accès t’attend toujours ici → {group_url}",
+    defaultTemplate: "Hey {firstName} 👋 Je viens de remarquer que tu ne t’étais pas encore abonné à la chaîne WhatsApp Prestige 🌐 Tu vas adorer ce qu’on partage là-bas — ton accès t’attend toujours ici → {group_url}",
   },
   {
     key: "1h",
     settingKey: "telegram_reminder_1h_message",
     delaySettingKey: "telegram_reminder_1h_delay_min",
     label: "Reminder 2 (1 h)",
-    description: "Second reminder if not joined.",
+    description: "Second reminder if the channel link was not clicked.",
     defaultDelayMin: 60,
-    defaultTemplate: "Petit message pour toi {firstName} ✨ Au cas où tu aurais loupé le lien tout à l’heure, voici l’accès direct au groupe privé Prestige 🌐 → {group_url}",
+    defaultTemplate: "Petit message pour toi {firstName} ✨ Au cas où tu aurais loupé le lien tout à l’heure, voici l’accès direct à la chaîne WhatsApp Prestige 🌐 → {group_url}",
   },
   {
     key: "4h",
     settingKey: "telegram_reminder_4h_message",
     delaySettingKey: "telegram_reminder_4h_delay_min",
     label: "Reminder 3 (4 h)",
-    description: "Third reminder if not joined.",
+    description: "Third reminder if the channel link was not clicked.",
     defaultDelayMin: 4 * 60,
-    defaultTemplate: "{firstName}, le groupe privé Prestige 🌐 est toujours ouvert pour toi 🔓 Ne loupe pas les nouveautés et le contenu exclusif — entre quand tu veux ici → {group_url}",
+    defaultTemplate: "{firstName}, la chaîne WhatsApp Prestige 🌐 est toujours ouverte pour toi 🔓 Ne loupe pas les nouveautés et le contenu exclusif — abonne-toi ici → {group_url}",
   },
   {
     key: "24h",
@@ -62,25 +59,25 @@ export const TELEGRAM_REMINDER_STEPS = [
     label: "Reminder 4 (24 h)",
     description: "24h reminder after /start.",
     defaultDelayMin: 24 * 60,
-    defaultTemplate: "Hello {firstName} ☀️ Petit rappel : ton accès au groupe privé Prestige 🌐 est encore actif. Si t’as eu un empêchement hier, voici le re-lien → {group_url}",
+    defaultTemplate: "Hello {firstName} ☀️ Petit rappel : ton accès à la chaîne WhatsApp Prestige 🌐 est encore actif. Si t’as eu un empêchement hier, voici le lien → {group_url}",
   },
   {
     key: "1w",
     settingKey: "telegram_reminder_1w_message",
     delaySettingKey: "telegram_reminder_1w_delay_min",
     label: "Reminder 5 (1 week)",
-    description: "Weekly nudge if still not joined.",
+    description: "Weekly nudge if the channel link was not clicked.",
     defaultDelayMin: 7 * 24 * 60,
-    defaultTemplate: "Hey {firstName} 👋 Cette semaine on a partagé pas mal de choses sympas dans le groupe privé Prestige 🌐 Si tu veux découvrir, c’est toujours par ici → {group_url}",
+    defaultTemplate: "Hey {firstName} 👋 Cette semaine on a partagé pas mal de choses sympas dans la chaîne WhatsApp Prestige 🌐 Si tu veux découvrir, c’est toujours par ici → {group_url}",
   },
   {
     key: "2w",
     settingKey: "telegram_reminder_2w_message",
     delaySettingKey: "telegram_reminder_2w_delay_min",
     label: "Reminder 6 (2 weeks)",
-    description: "Two-week nudge if still not joined.",
+    description: "Two-week nudge if the channel link was not clicked.",
     defaultDelayMin: 14 * 24 * 60,
-    defaultTemplate: "Salut {firstName} ! Ça fait deux semaines que ton accès au groupe privé Prestige 🌐 t’attend. Si t’es toujours partant·e, viens nous rejoindre → {group_url}",
+    defaultTemplate: "Salut {firstName} ! Ça fait deux semaines que ton accès à la chaîne WhatsApp Prestige 🌐 t’attend. Si t’es toujours partant·e, abonne-toi ici → {group_url}",
   },
   {
     key: "1m",
@@ -89,7 +86,7 @@ export const TELEGRAM_REMINDER_STEPS = [
     label: "Reminder 7 (1 month)",
     description: "Final monthly reminder.",
     defaultDelayMin: 30 * 24 * 60,
-    defaultTemplate: "Dernier mot de ma part {firstName} 🔔 Si tu veux encore profiter du groupe privé Prestige 🌐 et du contenu réservé, ton accès est toujours valable ici → {group_url}",
+    defaultTemplate: "Dernier mot de ma part {firstName} 🔔 Si tu veux encore profiter de la chaîne WhatsApp Prestige 🌐 et du contenu réservé, ton accès est toujours valable ici → {group_url}",
   },
 ] as const;
 
@@ -420,41 +417,14 @@ async function getBotStartState(telegramUserId: string) {
       telegramUserId: botStarts.telegramUserId,
       joinedAt: botStarts.joinedAt,
       botBlocked: botStarts.botBlocked,
+      sessionToken: botStarts.sessionToken,
+      funnelToken: botStarts.funnelToken,
     })
     .from(botStarts)
     .where(eq(botStarts.telegramUserId, telegramUserId))
     .limit(1);
 
   return rows[0] || null;
-}
-
-// Resolve the per-user invite URL for a reminder send. Prefer the cached
-// personal link (minted at /start with creates_join_request=true). If it's
-// expired or absent, regenerate before sending so the keyboard button always
-// routes through the bot's chat_join_request gate. Returns null when no
-// personal link can be obtained — caller will skip the inline button rather
-// than ship the static admin URL, which would re-open the bypass.
-async function resolveReminderInviteUrl(telegramUserId: string): Promise<string | null> {
-  const cached = await getValidPersonalInviteLink(telegramUserId);
-  if (cached) return cached;
-
-  const channelId = await getTelegramChannelId();
-  if (!channelId) return null;
-
-  const minted = await createPersonalInviteLink({ chatId: channelId, telegramUserId });
-  if (!minted.ok) {
-    log.warn("telegramReminders", "personal_invite_link_regenerate_failed", {
-      telegramUserId,
-      error: minted.error,
-    });
-    return null;
-  }
-  await setBotStartPersonalInviteLink(telegramUserId, minted.inviteLink, minted.expiresAt);
-  log.info("telegramReminders", "personal_invite_link_regenerated", {
-    telegramUserId,
-    expiresAt: minted.expiresAt.toISOString(),
-  });
-  return minted.inviteLink;
 }
 
 export async function processDueTelegramReminderJobs() {
@@ -480,16 +450,15 @@ export async function processDueTelegramReminderJobs() {
       continue;
     }
 
-    // Per-user resolution: cached link, else regenerate. The static admin URL
-    // is intentionally never used here. We re-template messageText with the
-    // freshly-resolved per-user link at SEND time (not just the inline button)
-    // so a channel switch heals the baked-in text too — the job text was baked
-    // at creation time and would otherwise ship a stale old-channel link.
-    const inviteUrl = await resolveReminderInviteUrl(job.telegramUserId);
-    const messageText = inviteUrl
-      ? replaceTelegramGroupUrlInText(job.messageText, inviteUrl)
-      : job.messageText;
-    const sendOptions = inviteUrl ? { replyMarkup: buildJoinGroupKeyboard(inviteUrl) } : {};
+    // Build the tracked URL at send time. `/wa-go` resolves the current
+    // admin-configured channel, so pending reminders follow destination edits.
+    const inviteUrl = buildWhatsAppRedirectUrl({
+      telegramUserId: job.telegramUserId,
+      sessionToken: botStartState.sessionToken,
+      funnelToken: botStartState.funnelToken,
+    });
+    const messageText = replaceTelegramGroupUrlInText(job.messageText, inviteUrl);
+    const sendOptions = { replyMarkup: buildJoinGroupKeyboard(inviteUrl) };
 
     const result = await sendTelegramMessage(job.chatId, messageText, sendOptions);
 

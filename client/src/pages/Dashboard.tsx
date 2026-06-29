@@ -368,7 +368,7 @@ function eventLabel(eventType: string, eventSource?: string | null) {
   const labels: Record<string, string> = {
     pageview: "Page view",
     unique_visitor: "New visitor",
-    whatsapp_click: "Telegram bot click",
+    whatsapp_click: "Channel link click",
     telegram_click: isTelegramGroupSource(eventSource) ? "Telegram bot click" : "Telegram contact click",
     scroll_25: "Scroll 25%",
     scroll_50: "Scroll 50%",
@@ -1246,7 +1246,7 @@ export default function Dashboard() {
     const saved = window.localStorage.getItem(PRESET_KEY);
     return saved === "48h" || saved === "7d" || saved === "15d" || saved === "30d" ? saved : "24h";
   });
-  const [telegramGroupUrl, setTelegramGroupUrl] = useState("");
+  const [channelUrl, setChannelUrl] = useState("");
 
   const loginMutation = trpc.dashboard.login.useMutation();
 
@@ -1407,8 +1407,8 @@ export default function Dashboard() {
   const botToMemberRate = botStarts > 0 ? `${((membersJoined / botStarts) * 100).toFixed(1)}%` : "0.0%";
 
   useEffect(() => {
-    const currentTelegramGroupUrl = settings.find((entry) => entry.settingKey === "telegram_group_url")?.settingValue;
-    setTelegramGroupUrl(currentTelegramGroupUrl || "");
+    const currentChannelUrl = settings.find((entry) => entry.settingKey === "whatsapp_channel_url")?.settingValue;
+    setChannelUrl(currentChannelUrl || "https://whatsapp.com/channel/0029Vb60PxI7YSd5pqwOq82R");
   }, [settings]);
 
   const trafficChartData = useMemo(
@@ -1453,12 +1453,12 @@ export default function Dashboard() {
     }
   };
 
-  const handleSaveTelegramGroupUrl = async () => {
-    const nextTelegramGroupUrl = telegramGroupUrl.trim();
+  const handleSaveChannelUrl = async () => {
+    const nextChannelUrl = channelUrl.trim();
 
-    if (!nextTelegramGroupUrl) {
-      toast.error("Telegram link required", {
-        description: "Please enter the Telegram group link you want the bot to use.",
+    if (!nextChannelUrl) {
+      toast.error("Channel link required", {
+        description: "Enter the WhatsApp or Telegram channel link the bot should send.",
       });
       return;
     }
@@ -1466,25 +1466,25 @@ export default function Dashboard() {
     try {
       const result = await updateSettingMutation.mutateAsync({
         token,
-        key: "telegram_group_url",
-        value: nextTelegramGroupUrl,
+        key: "whatsapp_channel_url",
+        value: nextChannelUrl,
       });
 
       if (!result.success) {
         toast.error("Save failed", {
-          description: result.error || "The Telegram link could not be updated right now.",
+          description: result.error || "The channel link could not be updated right now.",
         });
         return;
       }
 
       await settingsQuery.refetch();
-      toast.success("Telegram link updated", {
-        description: "Future bot messages and pending reminders now use the latest Telegram link.",
+      toast.success("Channel link updated", {
+        description: "Bot messages and reminders now redirect to the latest channel.",
       });
     } catch (error) {
       console.error(error);
       toast.error("Save failed", {
-        description: "An unexpected error happened while saving the Telegram link.",
+        description: "An unexpected error happened while saving the channel link.",
       });
     }
   };
@@ -1516,7 +1516,7 @@ export default function Dashboard() {
             <div className="mt-6 grid gap-3">
               <StatusPill dotClass="bg-emerald-400" label="Live" value="Rafraîchissement automatique toutes les 10 secondes" />
               <StatusPill dotClass="bg-violet-400" label="Période" value="Depuis minuit, 48h, 7, 15 ou 30 jours" />
-              <StatusPill dotClass="bg-cyan-400" label="Focus" value="Suivi trafic, groupe Telegram, contact Telegram, scroll et publicité active" />
+              <StatusPill dotClass="bg-cyan-400" label="Focus" value="Suivi trafic, clics canal, Subscribe Meta, contact Telegram et scroll" />
             </div>
 
             <form onSubmit={handleLogin} className="mt-6 space-y-4">
@@ -1661,22 +1661,22 @@ export default function Dashboard() {
             <Card className="lg:col-span-4">
               <div className="flex items-center gap-2 text-amber-300">
                 <LockKeyhole className="h-4 w-4" />
-                <h3 className="text-lg font-semibold tracking-[-0.03em]">Telegram link editor</h3>
+                <h3 className="text-lg font-semibold tracking-[-0.03em]">Channel link editor</h3>
               </div>
               <p className="mt-2 text-sm leading-6 text-slate-400">
-                Update the Telegram group link used by the bot messages without changing the landing page tracking or the rest of the dashboard setup.
+                Choose the WhatsApp or Telegram channel opened by links in bot messages and reminders.
               </p>
               <div className="mt-4 space-y-3">
                 <div>
-                  <label htmlFor="telegram-group-url" className="mb-2 block text-sm font-medium text-slate-300">
-                    Telegram group link
+                  <label htmlFor="channel-url" className="mb-2 block text-sm font-medium text-slate-300">
+                    WhatsApp or Telegram channel link
                   </label>
                   <input
-                    id="telegram-group-url"
+                    id="channel-url"
                     type="url"
-                    value={telegramGroupUrl}
-                    onChange={(event) => setTelegramGroupUrl(event.target.value)}
-                    placeholder="https://t.me/your-group-link"
+                    value={channelUrl}
+                    onChange={(event) => setChannelUrl(event.target.value)}
+                    placeholder="https://whatsapp.com/channel/..."
                     className="h-14 w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 text-base text-white outline-none transition focus:border-emerald-400"
                     autoComplete="off"
                   />
@@ -1684,7 +1684,7 @@ export default function Dashboard() {
                 <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
                   <button
                     type="button"
-                    onClick={() => void handleSaveTelegramGroupUrl()}
+                    onClick={() => void handleSaveChannelUrl()}
                     disabled={updateSettingMutation.isPending || settingsQuery.isLoading}
                     className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-emerald-400 px-5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-70"
                   >
@@ -1697,19 +1697,19 @@ export default function Dashboard() {
                     )}
                   </button>
                   <a
-                    href={telegramGroupUrl || "#"}
+                    href={channelUrl || "#"}
                     target="_blank"
                     rel="noreferrer"
-                    aria-disabled={!telegramGroupUrl}
+                    aria-disabled={!channelUrl}
                     onClick={(event) => {
-                      if (!telegramGroupUrl) event.preventDefault();
+                      if (!channelUrl) event.preventDefault();
                     }}
                     className={`inline-flex h-12 items-center justify-center gap-2 rounded-2xl border px-4 text-sm font-medium transition ${
-                      telegramGroupUrl
+                      channelUrl
                         ? "border-cyan-500/40 text-cyan-200 hover:border-cyan-400"
                         : "border-slate-700 text-slate-500 cursor-not-allowed"
                     }`}
-                    title={telegramGroupUrl ? "Open the link in a new tab" : "Type a link first"}
+                    title={channelUrl ? "Open the link in a new tab" : "Type a link first"}
                   >
                     Test link
                   </a>
@@ -1874,9 +1874,9 @@ export default function Dashboard() {
                 icon={Users}
               />
               <MetricCard
-                title="Clic bot Telegram"
+                title="Clics lien canal"
                 value={formatInt(botClicks)}
-                subtitle="Clic sur le bouton canal / bot"
+                subtitle="Clics WhatsApp ou Telegram"
                 color="green"
                 icon={MousePointerClick}
               />
@@ -1888,9 +1888,9 @@ export default function Dashboard() {
                 icon={Power}
               />
               <MetricCard
-                title="Membres rejoints"
+                title="Abonnés canal"
                 value={formatInt(membersJoined)}
-                subtitle="Bot start puis ajout confirmé"
+                subtitle="Premier clic après /start"
                 color="green"
                 icon={UserPlus}
               />
@@ -2004,7 +2004,7 @@ export default function Dashboard() {
                         <span className="text-right font-semibold text-cyan-300">
                           {formatInt(day.uniqueVisitors)}
                         </span>
-                        <span className="text-slate-500">Clic bot</span>
+                        <span className="text-slate-500">Clic canal</span>
                         <span className="text-right font-semibold text-emerald-300">
                           {formatInt(day.whatsappClicks)}
                         </span>
@@ -2030,7 +2030,7 @@ export default function Dashboard() {
                       <th className="whitespace-nowrap pb-3 pr-4 font-medium">Date</th>
                       <th className="whitespace-nowrap pb-3 pr-4 font-medium">Visits</th>
                       <th className="whitespace-nowrap pb-3 pr-4 font-medium">Unique Visitors</th>
-                      <th className="whitespace-nowrap pb-3 pr-4 font-medium">Clic bot</th>
+                      <th className="whitespace-nowrap pb-3 pr-4 font-medium">Clic canal</th>
                       <th className="whitespace-nowrap pb-3 font-medium">Contact direct</th>
                     </tr>
                   </thead>

@@ -14,6 +14,7 @@ import { startTelegramBroadcastWorker } from "../telegramBroadcast";
 import { setupTelegramWebhook } from "../telegramWebhook";
 import { setupWaGoRoute } from "../waGoRoute";
 import { startTelegramReminderWorker } from "../telegramReminders";
+import { seedConfiguredChannelUrl } from "../whatsappChannel";
 
 function assertProductionEnv() {
   if (process.env.NODE_ENV !== "production") {
@@ -68,6 +69,7 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 
 async function startServer() {
   assertProductionEnv();
+  await seedConfiguredChannelUrl();
   const app = express();
   const server = createServer(app);
   // Configure body parser with larger size limit for file uploads

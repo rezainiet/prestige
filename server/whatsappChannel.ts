@@ -1,10 +1,75 @@
-import { getSetting } from "./db";
+import { getSetting, upsertSetting } from "./db";
 import { log } from "./_core/logger";
 import { getTelegramGroupUrl } from "./telegramGroupLink";
 
 // Admin-editable site_settings key. When present it overrides the env var so
 // the WhatsApp destination can be rotated without a redeploy.
 export const WHATSAPP_CHANNEL_URL_SETTING_KEY = "whatsapp_channel_url";
+const CHANNEL_URL_SEED_VERSION_SETTING_KEY = "channel_url_seed_version";
+
+export type ChannelUrlValidation =
+  | { ok: true; value: string }
+  | { ok: false; error: string };
+
+export function validateChannelUrl(rawValue: string): ChannelUrlValidation {
+  const value = rawValue.trim();
+  if (!value) return { ok: false, error: "Channel link is required." };
+
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return { ok: false, error: "Enter a valid WhatsApp or Telegram channel URL." };
+  }
+
+  if (parsed.protocol !== "https:") {
+    return { ok: false, error: "Channel link must use HTTPS." };
+  }
+
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
+  const path = parsed.pathname.replace(/\/+$/, "");
+
+  if (host === "whatsapp.com") {
+    if (!/^\/channel\/[A-Za-z0-9]+$/.test(path)) {
+      return { ok: false, error: "WhatsApp links must use https://whatsapp.com/channel/..." };
+    }
+    return { ok: true, value: parsed.toString().replace(/\/$/, "") };
+  }
+
+  if (host === "t.me" || host === "telegram.me" || host === "telegram.org") {
+    if (!path || path === "/") {
+      return { ok: false, error: "Telegram link must include a channel or invite path." };
+    }
+    return { ok: true, value: parsed.toString().replace(/\/$/, "") };
+  }
+
+  return { ok: false, error: "Only WhatsApp or Telegram channel links are supported." };
+}
+
+/**
+ * Apply an explicitly versioned deployment seed once. The version marker
+ * prevents later restarts from overwriting channel changes made in the
+ * dashboard.
+ */
+export async function seedConfiguredChannelUrl() {
+  const version = (process.env.CHANNEL_URL_SEED_VERSION || "").trim();
+  const configuredUrl = envWhatsAppUrl();
+  if (!version || !configuredUrl) return;
+
+  const validation = validateChannelUrl(configuredUrl);
+  if (!validation.ok) {
+    log.error("whatsappChannel", "seed_url_invalid", { error: validation.error });
+    return;
+  }
+
+  const appliedVersion = (await getSetting(CHANNEL_URL_SEED_VERSION_SETTING_KEY))?.trim();
+  if (appliedVersion === version) return;
+
+  await upsertSetting(WHATSAPP_CHANNEL_URL_SETTING_KEY, validation.value);
+  await upsertSetting(CHANNEL_URL_SEED_VERSION_SETTING_KEY, version);
+  resetWhatsAppChannelUrlCache();
+  log.info("whatsappChannel", "seed_url_applied", { version });
+}
 
 // Refresh the in-process cache at most this often. The /wa-go redirect reads
 // this cache so the 302 latency is ~RTT (no DB hit on the hot path).
